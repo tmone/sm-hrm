@@ -123,14 +123,22 @@ export const mockAttendance: AttendanceRecord[] = [
   },
 ];
 
+const todayForMock = new Date(2024, 6, 29); // July 29, 2024. Months are 0-indexed.
+const addDaysToMock = (date: Date, days: number) => {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result.toISOString().split('T')[0];
+};
+
+
 export const mockLeaveRequests: LeaveRequest[] = [
   {
     id: 'lr001',
     employeeId: 'emp003',
     employeeName: 'Carol Williams',
     leaveType: 'Annual',
-    startDate: '2024-07-28',
-    endDate: '2024-08-02',
+    startDate: addDaysToMock(todayForMock, -1), // e.g. 2024-07-28
+    endDate: addDaysToMock(todayForMock, 4),    // e.g. 2024-08-02
     reason: 'Vacation',
     status: 'Approved',
     requestedDate: '2024-07-15T10:00:00Z',
@@ -142,11 +150,11 @@ export const mockLeaveRequests: LeaveRequest[] = [
     employeeId: 'emp001',
     employeeName: 'Alice Smith',
     leaveType: 'Sick',
-    startDate: '2024-08-05',
-    endDate: '2024-08-05',
+    startDate: addDaysToMock(todayForMock, 7), // e.g. 2024-08-05
+    endDate: addDaysToMock(todayForMock, 7),   // e.g. 2024-08-05
     reason: 'Feeling unwell',
     status: 'Pending',
-    requestedDate: '2024-08-04T09:00:00Z',
+    requestedDate: '2024-08-04T09:00:00Z', // This date should be before start date
   },
   {
     id: 'lr003',
@@ -159,6 +167,45 @@ export const mockLeaveRequests: LeaveRequest[] = [
     status: 'Rejected',
     requestedDate: '2024-07-20T11:00:00Z',
   },
+  {
+    id: 'lr004',
+    employeeId: 'emp004',
+    employeeName: 'David Brown',
+    leaveType: 'Annual',
+    startDate: addDaysToMock(todayForMock, 1), // e.g. 2024-07-30
+    endDate: addDaysToMock(todayForMock, 3),   // e.g. 2024-08-01
+    reason: 'Short break',
+    status: 'Approved',
+    requestedDate: '2024-07-25T10:00:00Z',
+    approvedBy: 'HR Manager',
+    approvedDate: '2024-07-25T14:00:00Z',
+  },
+  {
+    id: 'lr005',
+    employeeId: 'emp001',
+    employeeName: 'Alice Smith',
+    leaveType: 'Personal', // Custom leave type
+    startDate: addDaysToMock(todayForMock, 3), // e.g. 2024-08-01
+    endDate: addDaysToMock(todayForMock, 5),   // e.g. 2024-08-03
+    reason: 'Family event',
+    status: 'Approved',
+    requestedDate: '2024-07-26T09:00:00Z',
+    approvedBy: 'HR Manager',
+    approvedDate: '2024-07-26T15:00:00Z',
+  },
+   {
+    id: 'lr006',
+    employeeId: 'emp002',
+    employeeName: 'Bob Johnson',
+    leaveType: 'Sick',
+    startDate: addDaysToMock(todayForMock, 0), // e.g. 2024-07-29
+    endDate: addDaysToMock(todayForMock, 0),   // e.g. 2024-07-29
+    reason: 'Sudden illness',
+    status: 'Approved',
+    requestedDate: addDaysToMock(todayForMock, 0) + 'T08:00:00Z',
+    approvedBy: 'HR Manager',
+    approvedDate: addDaysToMock(todayForMock, 0) + 'T08:30:00Z',
+  },
 ];
 
 // Add mock data for facial recognition stats
@@ -168,8 +215,11 @@ const mockApprovedRegisteredFaces = 8;
 
 export const dashboardSummaryMetrics = [
   { label: 'Total Employees', value: mockEmployees.filter(e => e.status !== 'Terminated').length, icon: Users, change: '+2 this month', changeType: 'positive' as const },
-  { label: 'On Leave Today', value: mockAttendance.filter(a => a.date === new Date().toISOString().split('T')[0] && a.status === 'On Leave').length, icon: CalendarX, change: '-1 vs yesterday', changeType: 'negative' as const },
-  { label: 'Present Today', value: mockAttendance.filter(a => a.date === new Date().toISOString().split('T')[0] && (a.status === 'Present' || a.status === 'Late')).length, icon: UserCheck, change: '+3 vs yesterday', changeType: 'positive' as const },
-  { label: 'Pending Leave Requests', value: mockLeaveRequests.filter(lr => lr.status === 'Pending').length, icon: Briefcase, change: '', changeType: 'positive' as const },
+  { label: 'On Leave Today', value: mockLeaveRequests.filter(lr => {
+      const todayStr = new Date().toISOString().split('T')[0];
+      return lr.status === 'Approved' && lr.startDate <= todayStr && lr.endDate >= todayStr;
+  }).length, icon: CalendarX, change: '', changeType: 'neutral' as const },
+  { label: 'Present Today', value: mockAttendance.filter(a => a.date === new Date().toISOString().split('T')[0] && (a.status === 'Present' || a.status === 'Late')).length, icon: UserCheck, change: '', changeType: 'neutral' as const },
+  { label: 'Pending Leave Requests', value: mockLeaveRequests.filter(lr => lr.status === 'Pending').length, icon: Briefcase, change: '', changeType: 'neutral' as const },
   { label: 'Registered Faces', value: `${mockApprovedRegisteredFaces} / ${mockTotalRegisteredFaces}`, icon: ScanFace, description: 'Approved / Total', changeType: 'positive' as const },
 ];
