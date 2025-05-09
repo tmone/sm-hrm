@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { LayoutDashboard, Users, CalendarClock, Plane, LineChart, Settings, ScanFace, UsersCog } from 'lucide-react';
+import { LayoutDashboard, Users, CalendarClock, Plane, LineChart, Settings, ScanFace, UserCog } from 'lucide-react';
 
 export const APP_NAME = "StepMedia HRM";
 
@@ -17,7 +17,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/leave", label: "Leave", icon: Plane },
   { href: "/facial-recognition", label: "Face Registration", icon: ScanFace },
   { href: "/reports", label: "Reports", icon: LineChart },
-  { href: "/user-management", label: "User & Role Management", icon: UsersCog },
+  { href: "/user-management", label: "User & Role Management", icon: UserCog },
 ];
 
 export const SETTINGS_NAV_ITEMS: NavItem[] = [
