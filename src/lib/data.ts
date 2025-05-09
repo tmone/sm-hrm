@@ -1,5 +1,5 @@
 import type { Employee, AttendanceRecord, LeaveRequest } from '@/types';
-import { Users, Briefcase, CalendarX, UserCheck } from 'lucide-react';
+import { Users, Briefcase, CalendarX, UserCheck, ScanFace } from 'lucide-react';
 
 export const mockEmployees: Employee[] = [
   {
@@ -161,9 +161,15 @@ export const mockLeaveRequests: LeaveRequest[] = [
   },
 ];
 
+// Add mock data for facial recognition stats
+const mockTotalRegisteredFaces = 12;
+const mockApprovedRegisteredFaces = 8;
+
+
 export const dashboardSummaryMetrics = [
   { label: 'Total Employees', value: mockEmployees.filter(e => e.status !== 'Terminated').length, icon: Users, change: '+2 this month', changeType: 'positive' as const },
   { label: 'On Leave Today', value: mockAttendance.filter(a => a.date === new Date().toISOString().split('T')[0] && a.status === 'On Leave').length, icon: CalendarX, change: '-1 vs yesterday', changeType: 'negative' as const },
   { label: 'Present Today', value: mockAttendance.filter(a => a.date === new Date().toISOString().split('T')[0] && (a.status === 'Present' || a.status === 'Late')).length, icon: UserCheck, change: '+3 vs yesterday', changeType: 'positive' as const },
   { label: 'Pending Leave Requests', value: mockLeaveRequests.filter(lr => lr.status === 'Pending').length, icon: Briefcase, change: '', changeType: 'positive' as const },
+  { label: 'Registered Faces', value: `${mockApprovedRegisteredFaces} / ${mockTotalRegisteredFaces}`, icon: ScanFace, description: 'Approved / Total', changeType: 'positive' as const },
 ];
