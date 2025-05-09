@@ -1,3 +1,6 @@
+
+'use client';
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { BarChart, CalendarDays, PieChart, Users } from "lucide-react";
 import Image from "next/image";
@@ -115,3 +118,4 @@ export default function ReportsPage() {
     </div>
   );
 }
+
