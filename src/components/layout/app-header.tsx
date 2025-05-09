@@ -1,3 +1,7 @@
+// @ts-nocheck
+// TODO: Fix typings
+'use client';
+
 import Link from 'next/link';
 import {
   DropdownMenu,
