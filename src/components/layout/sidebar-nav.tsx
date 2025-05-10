@@ -1,7 +1,7 @@
 "use client";
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter }_next_navigation from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { NAV_ITEMS, SETTINGS_NAV_ITEMS, APP_NAME, type NavItem } from '@/lib/constants';
 import {
@@ -40,6 +40,13 @@ function NavLink({ item }: { item: NavItem }) {
 }
 
 export function SidebarNav({ className }: SidebarNavProps) {
+  const router = useRouter();
+
+  const handleLogout = () => {
+    // In a real app, you'd clear session/token here
+    router.push('/login');
+  };
+
   return (
     <Sidebar collapsible="icon" side="left" variant="sidebar" className={cn(className)}>
       <SidebarHeader className="border-b">
@@ -64,7 +71,10 @@ export function SidebarNav({ className }: SidebarNavProps) {
              <NavLink key={item.href} item={item} />
           ))}
           <SidebarMenuItem>
-             <SidebarMenuButton tooltip={{ children: "Logout", className: "bg-card text-card-foreground border-border shadow-md"}}>
+             <SidebarMenuButton 
+                onClick={handleLogout}
+                tooltip={{ children: "Logout", className: "bg-card text-card-foreground border-border shadow-md"}}
+              >
                 <LogOut />
                 <span>Logout</span>
             </SidebarMenuButton>
