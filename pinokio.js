@@ -11,7 +11,9 @@ module.exports = {
       start: info.running("start.js"),
       update: info.running("update.js"),
       reset: info.running("reset.js"),
-      link: info.running("link.js")
+      link: info.running("link.js"),
+      stop: info.running("stop.js"),
+      restart: info.running("restart.js")
     }
     if (running.install) {
       return [{
@@ -33,6 +35,14 @@ module.exports = {
             icon: 'fa-solid fa-terminal',
             text: "Terminal",
             href: "start.js",
+          }, {
+            icon: 'fa-solid fa-stop',
+            text: "Stop",
+            href: "stop.js",
+          }, {
+            icon: 'fa-solid fa-refresh',
+            text: "Restart",
+            href: "restart.js",
           }]
         } else {
           return [{
@@ -40,6 +50,14 @@ module.exports = {
             icon: 'fa-solid fa-terminal',
             text: "Terminal",
             href: "start.js",
+          }, {
+            icon: 'fa-solid fa-stop',
+            text: "Stop",
+            href: "stop.js",
+          }, {
+            icon: 'fa-solid fa-refresh',
+            text: "Restart",
+            href: "restart.js",
           }]
         }
       } else if (running.update) {
@@ -69,6 +87,10 @@ module.exports = {
           icon: "fa-solid fa-power-off",
           text: "Start",
           href: "start.js",
+        }, {
+          icon: "fa-solid fa-stop",
+          text: "Kill Stuck Ports",
+          href: "stop.js",
         }, {
           icon: "fa-solid fa-plug",
           text: "Update",

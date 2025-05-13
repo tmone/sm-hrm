@@ -1,24 +1,31 @@
 module.exports = {
   daemon: true,
   run: [
-    // Kill any existing processes on the required ports before starting
+    // Kill existing processes by port to ensure all instances are stopped
     {
       method: "shell.run",
       params: {
         message: [
-          "echo 'Cleaning up ports before starting...'",
+          "echo 'Stopping any existing processes...'",
+          // Kill processes by name
+          "pkill -f 'python app.py' || echo 'Python not running'",
+          "pkill -f 'next dev' || echo 'Next.js not running'",
+
           // Kill any processes using port 9002 (Next.js)
           "kill -9 $(lsof -t -i:9002 2>/dev/null) 2>/dev/null || echo 'No process using port 9002'",
           // Kill any processes using port 3000 (default Next.js port)
           "kill -9 $(lsof -t -i:3000 2>/dev/null) 2>/dev/null || echo 'No process using port 3000'",
           // Kill any processes using port 7860 (Python backend)
           "kill -9 $(lsof -t -i:7860 2>/dev/null) 2>/dev/null || echo 'No process using port 7860'",
+
           // Alternative approach using ss if lsof is not available
           "for pid in $(ss -tulpn | grep ':9002\\|:3000\\|:7860' | awk '{print $7}' | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u 2>/dev/null); do kill -9 $pid 2>/dev/null || echo \"Could not kill PID $pid\"; done",
-          "echo 'Port cleanup complete.'"
+
+          "echo 'All processes stopped.'",
+          "sleep 2" // Wait for ports to be freed
         ],
         on: [{
-          "event": "Port cleanup complete.",
+          "event": "All processes stopped.",
           "done": true
         }]
       }
@@ -71,7 +78,6 @@ module.exports = {
           "JWT_SECRET": "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
         },
         message: [
-          "npm install",            // Install dependencies
           "npm run dev"             // Start Next.js development server
         ],
         on: [{
@@ -86,7 +92,7 @@ module.exports = {
       method: "local.set",
       params: {
         // Use the Next.js frontend URL
-        url: "http://localhost:3000"
+        url: "http://localhost:9002"
       }
     }
   ]
