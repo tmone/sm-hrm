@@ -4,20 +4,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
-import { 
-  ArrowLeft, 
-  RefreshCw, 
-  Filter, 
-  LayoutGrid, 
-  List, 
-  Users, 
-  Search
-} from 'lucide-react';
-import { DetectedFace } from '../../types';
+import Image from 'next/image';
+import { Users, Search, Tag, UserPlus, ArrowLeft, RefreshCw, Filter, LayoutGrid, List, CheckCheck, Trash2, UserMinus } from 'lucide-react';
+import { DetectedFace, IdentityGroup } from '../../types';
 import { 
   fetchFacesForVideo, 
   createIdentityGroup, 
@@ -26,17 +22,6 @@ import {
   removeFaceFromGroup,
   mergeIdentityGroups
 } from '../../api';
-
-// Import our extracted components
-import {
-  FaceCard,
-  GroupCard,
-  MergeDialog,
-  GroupDialog,
-  IdentityFacesDialog,
-  DeleteFaceDialog,
-  RemoveFromGroupDialog
-} from './components';
 
 interface VideoLabelingProps {
   videoId: string;
@@ -132,7 +117,7 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
   const [selectedGroups, setSelectedGroups] = useState<Record<string, boolean>>({});
   const [isMergeDialogOpen, setIsMergeDialogOpen] = useState(false);
   const [isMerging, setIsMerging] = useState(false);
-  const [mergeMode, setMergeMode] = useState<'group-only' | 'mixed'>('mixed');
+  const [mergeMode, setMergeMode] = useState<'group-only' | 'mixed'>('group-only');
   
   // For face dialogs
   const [isDeleteFaceDialogOpen, setIsDeleteFaceDialogOpen] = useState(false);
@@ -443,6 +428,15 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
     setIsIdentityDialogOpen(true);
   };
   
+  // Option to navigate to identity page
+  const navigateToIdentity = (identityCode: string) => {
+    // Close the dialog first
+    setIsIdentityDialogOpen(false);
+    
+    // Navigate to identity management page
+    router.push(`/facial-recognition?view=identity&id=${identityCode}`);
+  };
+  
   // Handle delete face (permanent deletion)
   const handleDeleteFace = async () => {
     if (!faceToDelete) return;
@@ -598,15 +592,15 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
       .filter(([_, selected]) => selected)
       .map(([groupId]) => groupId);
       
+    // If we're in mixed mode, also check for individual faces to add to a group
+    const selectedIndividualFaces: DetectedFace[] = [];
+    let targetGroupId = '';
+    
     // Find selected faces that are not already in groups regardless of merge mode
     // This enables the ability to merge individual faces with groups or create new groups from selected faces
     const selectedFaceIds = Object.entries(selectedFaces)
       .filter(([_, selected]) => selected)
       .map(([faceId]) => faceId);
-    
-    // If we're in mixed mode, also check for individual faces to add to a group
-    const selectedIndividualFaces: DetectedFace[] = [];
-    let targetGroupId = '';
     
     if (selectedFaceIds.length > 0) {
       // Find faces that don't have an identity_code (individual faces)
@@ -651,6 +645,9 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
       });
       return;
     }
+    
+    // If we have at least one individual face and one group, it's a valid merge
+    // This supports the case of merging individual faces with a group
     
     setIsMerging(true);
     try {
@@ -773,7 +770,7 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
     setFaceToRemove(face);
     setIsRemoveFromGroupDialogOpen(true);
   };
-  
+
   const formatTimestamp = (timestamp: string) => {
     try {
       return new Date(timestamp).toLocaleTimeString([], {
@@ -911,30 +908,145 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                   if ('type' in item && item.type === 'group') {
                     const group = item.data;
                     return (
-                      <GroupCard
-                        key={`group-${group.identityCode}`}
-                        identityCode={group.identityCode}
-                        representativeFace={group.representativeFace}
-                        faceCount={group.faceCount}
-                        isSelected={selectedGroups[group.identityCode] || false}
-                        onSelect={toggleGroupSelection}
-                        onViewFaces={viewIdentityFaces}
-                      />
+                      <div 
+                        key={`group-${group.identityCode}`} 
+                        className={`border rounded-md overflow-hidden ${
+                          selectedGroups[group.identityCode] ? 'ring-2 ring-blue-500 bg-blue-50' : 'bg-primary/5'
+                        } cursor-pointer hover:bg-primary/10 transition-colors relative`}
+                      >
+                        <div 
+                          className="absolute top-1 left-1 z-10" 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleGroupSelection(group.identityCode);
+                          }}
+                        >
+                          <Checkbox 
+                            checked={selectedGroups[group.identityCode] || false}
+                            className="h-5 w-5 bg-white/80"
+                          />
+                        </div>
+                        
+                        <div 
+                          className="aspect-square relative"
+                          onClick={() => viewIdentityFaces(group.identityCode)}
+                        >
+                          {/* Show the representative face of the group */}
+                          <Image
+                            src={group.representativeFace.imageUrl}
+                            alt="Group Representative"
+                            fill
+                            className="object-cover"
+                          />
+                          
+                          {/* Group badge */}
+                          <div className="absolute inset-0 bg-black/30 flex flex-col items-center justify-center">
+                            <div className="text-white font-bold text-lg">{group.identityCode}</div>
+                            <div className="text-white/90 text-sm mt-1">{group.faceCount} faces</div>
+                          </div>
+                          
+                          {/* Quality indicator */}
+                          {group.representativeFace.quality_score !== undefined && (
+                            <Badge 
+                              variant="outline" 
+                              className="absolute bottom-1 right-1 text-xs bg-blue-500/70 text-white border-none"
+                            >
+                              Best Q: {group.representativeFace.quality_score}
+                            </Badge>
+                          )}
+                        </div>
+                        
+                        <div 
+                          className="p-2 text-center font-medium bg-primary/10 text-primary flex items-center justify-between px-3"
+                          onClick={() => toggleGroupSelection(group.identityCode)}
+                        >
+                          <div>Select</div>
+                          <div onClick={(e) => {
+                            e.stopPropagation();
+                            viewIdentityFaces(group.identityCode);
+                          }}>View Faces</div>
+                        </div>
+                      </div>
                     );
                   }
                   
                   // Regular face card (individual)
                   const face = item as DetectedFace;
                   return (
-                    <FaceCard
-                      key={face.id}
-                      face={face}
-                      isSelected={selectedFaces[face.id] || false}
-                      onSelect={toggleFaceSelection}
-                      onDelete={promptDeleteFace}
-                      recentlyRemovedFaceId={recentlyRemovedFaceId}
-                      formatTimestamp={formatTimestamp}
-                    />
+                    <div 
+                      key={face.id} 
+                      className={`border rounded-md overflow-hidden relative ${
+                        selectedFaces[face.id] ? 'ring-2 ring-primary' : ''
+                      } ${
+                        recentlyRemovedFaceId === face.id ? 'ring-2 ring-blue-500 animate-pulse' : ''
+                      }`}
+                    >
+                      {recentlyRemovedFaceId === face.id && (
+                        <div className="absolute inset-0 bg-blue-500/10 z-10 flex items-center justify-center pointer-events-none">
+                          <Badge className="bg-blue-500 text-white pointer-events-none">
+                            Removed from group
+                          </Badge>
+                        </div>
+                      )}
+                      <div className="aspect-square relative">
+                        <Image
+                          src={face.imageUrl}
+                          alt="Face"
+                          fill
+                          className="object-cover"
+                        />
+                        
+                        <div className="absolute top-1 left-1 z-10">
+                          <Checkbox 
+                            checked={selectedFaces[face.id] || false}
+                            className="h-5 w-5 bg-white/80"
+                            onClick={(e) => e.stopPropagation()}
+                            onCheckedChange={() => toggleFaceSelection(face.id)}
+                          />
+                        </div>
+                        <div className="absolute top-1 right-1">
+                          <Button
+                            size="icon"
+                            variant="destructive"
+                            className="h-6 w-6 rounded-full bg-red-500/70 hover:bg-red-600/90"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              promptDeleteFace(face);
+                            }}
+                          >
+                            <Trash2 className="h-3 w-3 text-white" />
+                          </Button>
+                        </div>
+                        
+                        {face.identity_code && (
+                          <Badge 
+                            variant="outline" 
+                            className="absolute bottom-1 left-1 bg-black/50 text-white border-none"
+                          >
+                            {face.identity_code}
+                          </Badge>
+                        )}
+                        
+                        {face.quality_score !== undefined && (
+                          <Badge 
+                            variant="outline" 
+                            className={`absolute bottom-1 right-1 text-xs ${
+                              face.quality_score > 80 
+                                ? 'bg-green-500/70 text-white border-none' 
+                                : face.quality_score > 60
+                                  ? 'bg-yellow-500/70 text-white border-none'
+                                  : 'bg-red-500/70 text-white border-none'
+                            }`}
+                          >
+                            Q: {face.quality_score}
+                          </Badge>
+                        )}
+                      </div>
+                      
+                      <div className="p-2 text-xs font-medium bg-muted/30">
+                        {formatTimestamp(face.timestamp)}
+                      </div>
+                    </div>
                   );
                 })}
               </div>
@@ -1123,55 +1235,342 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
         </Card>
       </div>
       
-      {/* Group Dialog */}
-      <GroupDialog
-        open={isGroupDialogOpen}
-        onOpenChange={setIsGroupDialogOpen}
-        selectedFaces={selectedFaces}
-        faces={faces}
-        onGroupFaces={groupSelectedFaces}
-      />
+      {/* Group Confirmation Dialog */}
+      <Dialog open={isGroupDialogOpen} onOpenChange={setIsGroupDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create Identity Group</DialogTitle>
+            <DialogDescription>
+              You are about to group {selectedFaceCount} face{selectedFaceCount !== 1 ? 's' : ''} into a single identity.
+              This will assign {selectedFaceCount === 1 ? 'it' : 'them all'} the same PERSON-XXXX identifier.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="py-4">
+            <h4 className="font-medium mb-2">Selected Faces:</h4>
+            <div className="grid grid-cols-4 gap-2 max-h-60 overflow-y-auto p-2 border rounded-md">
+              {Object.entries(selectedFaces)
+                .filter(([_, selected]) => selected)
+                .map(([faceId]) => {
+                  const face = faces.find(f => f.id === faceId);
+                  if (!face) return null;
+                  
+                  return (
+                    <div key={faceId} className="relative h-20 rounded-md overflow-hidden">
+                      <Image
+                        src={face.imageUrl}
+                        alt="Selected face"
+                        fill
+                        className="object-cover"
+                      />
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+          
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsGroupDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={groupSelectedFaces}>
+              <CheckCheck className="mr-2 h-4 w-4" />
+              Confirm Grouping
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       
-      {/* Merge Dialog */}
-      <MergeDialog
-        open={isMergeDialogOpen}
-        onOpenChange={setIsMergeDialogOpen}
-        selectedGroups={selectedGroups}
-        selectedFaces={selectedFaces}
-        faces={faces}
-        groups={processedFaces.groups}
-        isMerging={isMerging}
-        onMerge={mergeSelectedGroups}
-      />
+      {/* Merge Groups Confirmation Dialog */}
+      <Dialog open={isMergeDialogOpen} onOpenChange={setIsMergeDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Merge Groups and Faces</DialogTitle>
+            <DialogDescription>
+              {selectedGroupCount > 0 ? (
+                <>
+                  You are about to merge selected items into a single identity.
+                  All faces will be merged into the group with the lowest ID number.
+                </>
+              ) : (
+                <>You are about to create a new group with the selected faces.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="py-4">
+            {selectedGroupCount > 0 && (
+              <>
+                <h4 className="font-medium mb-2">Selected Groups:</h4>
+                <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 border rounded-md">
+                  {Object.entries(selectedGroups)
+                    .filter(([_, selected]) => selected)
+                    .map(([groupId]) => {
+                      const group = processedFaces.groups.find(g => g.identityCode === groupId);
+                      if (!group) return null;
+                      
+                      return (
+                        <div key={groupId} className="p-2 border rounded flex flex-col items-center">
+                          <div className="relative h-24 w-24 mb-2 rounded-md overflow-hidden">
+                            <Image
+                              src={group.representativeFace.imageUrl}
+                              alt="Group representative"
+                              fill
+                              className="object-cover"
+                            />
+                          </div>
+                          <div className="font-medium">{group.identityCode}</div>
+                          <div className="text-sm text-muted-foreground">{group.faceCount} faces</div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </>
+            )}
+            
+            {/* Display selected individual faces */}
+            {Object.entries(selectedFaces).filter(([_, selected]) => selected).length > 0 && (
+              <>
+                <h4 className="font-medium mb-2 mt-4">Selected Individual Faces:</h4>
+                <div className="grid grid-cols-4 gap-2 max-h-40 overflow-y-auto p-2 border rounded-md">
+                  {Object.entries(selectedFaces)
+                    .filter(([_, selected]) => selected)
+                    .map(([faceId]) => {
+                      const face = faces.find(f => f.id === faceId && !f.identity_code);
+                      if (!face) return null; // Skip if face not found or is not an individual
+                      
+                      return (
+                        <div key={faceId} className="relative h-16 w-16 rounded-md overflow-hidden">
+                          <Image
+                            src={face.imageUrl}
+                            alt="Individual face"
+                            fill
+                            className="object-cover"
+                          />
+                        </div>
+                      );
+                    })}
+                </div>
+              </>
+            )}
+            
+            <div className="mt-4 p-3 bg-blue-50 text-blue-800 rounded-md">
+              <p className="text-sm">
+                <strong>Note:</strong> When merging, all items will be combined into the group with the lowest ID number. 
+                If only individual faces are selected, a new group will be created.
+                This operation cannot be undone.
+              </p>
+            </div>
+          </div>
+          
+          <DialogFooter>
+            <Button variant="outline" disabled={isMerging} onClick={() => setIsMergeDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={mergeSelectedGroups}
+              disabled={isMerging || (selectedGroupCount + Object.entries(selectedFaces).filter(([_, selected]) => selected).length < 2)}
+              className="gap-2"
+            >
+              {isMerging ? (
+                <>
+                  <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-r-transparent"></div>
+                  Merging...
+                </>
+              ) : (
+                <>
+                  <Users className="mr-2 h-4 w-4" />
+                  {selectedGroupCount > 0 ? "Confirm Merge" : "Create Group"}
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       
       {/* Identity Faces Dialog */}
-      <IdentityFacesDialog
-        open={isIdentityDialogOpen}
-        onOpenChange={setIsIdentityDialogOpen}
-        selectedIdentity={selectedIdentity}
-        identityFaces={identityFaces}
-        isLoading={isLoadingIdentityFaces}
-        onRemoveFromGroup={promptRemoveFromGroup}
-        formatTimestamp={formatTimestamp}
-      />
+      <Dialog open={isIdentityDialogOpen} onOpenChange={setIsIdentityDialogOpen}>
+        <DialogContent className="sm:max-w-[900px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-between">
+              <span>Identity Group: {selectedIdentity}</span>
+              <Badge variant="outline" className="ml-2">
+                {identityFaces.length} faces
+              </Badge>
+            </DialogTitle>
+            <DialogDescription>
+              These are all the faces that belong to the same identity group.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="py-4">
+            {isLoadingIdentityFaces ? (
+              <div className="py-8 text-center">
+                <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-primary border-r-transparent"></div>
+                <p>Loading faces...</p>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 max-h-[500px] overflow-y-auto p-2">
+                  {identityFaces.map(face => (
+                    <div key={face.id} className="border rounded-md overflow-hidden">
+                      <div className="aspect-square relative">
+                        <Image
+                          src={face.imageUrl}
+                          alt="Face"
+                          fill
+                          className="object-cover"
+                        />
+                        
+                        <Button
+                          size="icon"
+                          variant="destructive"
+                          className="absolute top-1 right-1 h-6 w-6 rounded-full bg-blue-500/70 hover:bg-blue-600/90"
+                          onClick={() => promptRemoveFromGroup(face)}
+                        >
+                          <UserMinus className="h-3 w-3 text-white" />
+                        </Button>
+                        
+                        {face.quality_score !== undefined && (
+                          <Badge 
+                            variant="outline" 
+                            className={`absolute bottom-1 right-1 text-xs ${
+                              face.quality_score > 80 
+                                ? 'bg-green-500/70 text-white border-none' 
+                                : face.quality_score > 60
+                                  ? 'bg-yellow-500/70 text-white border-none'
+                                  : 'bg-red-500/70 text-white border-none'
+                            }`}
+                          >
+                            Q: {face.quality_score}
+                          </Badge>
+                        )}
+                      </div>
+                      
+                      <div className="p-2 text-xs font-medium bg-muted/30">
+                        {formatTimestamp(face.timestamp)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                
+                <div className="mt-4 text-center">
+                  <Button 
+                    variant="outline" 
+                    onClick={() => navigateToIdentity(selectedIdentity!)}
+                    className="mt-2"
+                  >
+                    <Users className="mr-2 h-4 w-4" />
+                    Go to Identity Management
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+          
+          <DialogFooter>
+            <Button 
+              variant="outline" 
+              onClick={() => setIsIdentityDialogOpen(false)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       
-      {/* Delete Face Dialog */}
-      <DeleteFaceDialog
-        open={isDeleteFaceDialogOpen}
-        onOpenChange={setIsDeleteFaceDialogOpen}
-        faceToDelete={faceToDelete}
-        isDeleting={isDeleting}
-        onDelete={handleDeleteFace}
-      />
+      {/* Delete Face Confirmation Dialog */}
+      <AlertDialog open={isDeleteFaceDialogOpen} onOpenChange={setIsDeleteFaceDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Permanently Delete Face</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to permanently delete this face? This action cannot be undone and will delete the image from disk.
+            </AlertDialogDescription>
+            {faceToDelete?.identity_code && (
+              <div className="mt-2 text-amber-600 font-medium text-sm">
+                Note: This face belongs to identity group <span className="font-bold">{faceToDelete.identity_code}</span>.
+                Deleting it will also remove it from this group.
+              </div>
+            )}
+          </AlertDialogHeader>
+          
+          {faceToDelete && (
+            <div className="py-4 flex justify-center">
+              <div className="w-40 h-40 relative rounded overflow-hidden">
+                <Image
+                  src={faceToDelete.imageUrl}
+                  alt="Face to delete"
+                  fill
+                  className="object-cover"
+                />
+              </div>
+            </div>
+          )}
+          
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleDeleteFace}
+              className="bg-red-600 hover:bg-red-700"
+              disabled={isDeleting}
+            >
+              {isDeleting ? (
+                <>
+                  <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-r-transparent"></div>
+                  Deleting...
+                </>
+              ) : "Permanently Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       
       {/* Remove Face from Group Dialog */}
-      <RemoveFromGroupDialog
-        open={isRemoveFromGroupDialogOpen}
-        onOpenChange={setIsRemoveFromGroupDialogOpen}
-        faceToRemove={faceToRemove}
-        isRemoving={isRemoving}
-        onRemove={handleRemoveFaceFromGroup}
-      />
+      <AlertDialog open={isRemoveFromGroupDialogOpen} onOpenChange={setIsRemoveFromGroupDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove Face from Group</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to remove this face from its group? The face will be kept as an individual face.
+            </AlertDialogDescription>
+            {faceToRemove?.identity_code && (
+              <div className="mt-2 text-blue-600 font-medium text-sm">
+                This face will be removed from identity group <span className="font-bold">{faceToRemove.identity_code}</span>.
+              </div>
+            )}
+          </AlertDialogHeader>
+          
+          {faceToRemove && (
+            <div className="py-4 flex justify-center">
+              <div className="w-40 h-40 relative rounded overflow-hidden">
+                <Image
+                  src={faceToRemove.imageUrl}
+                  alt="Face to remove from group"
+                  fill
+                  className="object-cover"
+                />
+              </div>
+            </div>
+          )}
+          
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isRemoving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleRemoveFaceFromGroup}
+              className="bg-blue-600 hover:bg-blue-700"
+              disabled={isRemoving}
+            >
+              {isRemoving ? (
+                <>
+                  <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-r-transparent"></div>
+                  Removing...
+                </>
+              ) : "Remove from Group"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
