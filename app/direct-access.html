@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Direct Access to StepMedia HRM</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+        }
+        h1 {
+            color: #2563eb;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 10px;
+        }
+        .card {
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .btn {
+            display: inline-block;
+            background-color: #2563eb;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 4px;
+            text-decoration: none;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .btn:hover {
+            background-color: #1d4ed8;
+        }
+        code {
+            background-color: #f1f5f9;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        .warning {
+            background-color: #fed7aa;
+            border-left: 4px solid #f97316;
+            padding: 10px 15px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Direct Access to StepMedia HRM</h1>
+    
+    <div class="card">
+        <h2>Direct Links</h2>
+        <p>These links will bypass normal login and take you directly to specific pages:</p>
+        
+        <a href="/dashboard" class="btn">Open Dashboard</a>
+        <a href="/login" class="btn">Login Page</a>
+        <a href="/" class="btn">Home Page</a>
+    </div>
+    
+    <div class="card">
+        <h2>Login Information</h2>
+        <p>Default credentials:</p>
+        <ul>
+            <li><strong>Username:</strong> admin</li>
+            <li><strong>Password:</strong> admin123</li>
+        </ul>
+        <p>Note: These credentials should work when the authentication system is functioning properly.</p>
+    </div>
+    
+    <div class="card">
+        <h2>Troubleshooting</h2>
+        <p>If you encounter issues with the authentication or accessing certain pages:</p>
+        <ol>
+            <li>Make sure both the FastAPI backend and Next.js frontend are running</li>
+            <li>Check browser console for any errors</li>
+            <li>Try accessing the direct dashboard link from above to bypass authentication</li>
+            <li>Check that the environment variables are set correctly:
+                <ul>
+                    <li><code>NEXT_PUBLIC_PYTHON_BACKEND_URL="http://127.0.0.1:7860"</code></li>
+                    <li><code>JWT_SECRET="09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"</code></li>
+                </ul>
+            </li>
+        </ol>
+        
+        <div class="warning">
+            <p><strong>Note:</strong> The direct access links may need administrative privileges to function. The links are provided to help diagnose issues with the application.</p>
+        </div>
+    </div>
+</body>
+</html>

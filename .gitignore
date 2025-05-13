@@ -37,3 +37,9 @@ app/next-env.d.ts
 
 # Node modules
 app/node_modules/
+app/static/faces/
+app/static/archive/
+app/.modified
+app/models/
+app/static/uploads/
+app/static/

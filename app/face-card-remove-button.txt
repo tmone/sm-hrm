@@ -1,0 +1,63 @@
+// STEP 1: Add this function near your other function declarations in page.tsx
+// Add it right after the removeFace function we already implemented
+
+// Handle face removal with confirmation
+const handleRemoveFace = (e: React.MouseEvent, faceId: string) => {
+  // Stop the event from triggering the face selection or other parent handlers
+  e.stopPropagation();
+  e.preventDefault();
+  
+  // Confirm before removing
+  if (window.confirm('Are you sure you want to remove this face?')) {
+    // Call the remove function with current video ID and face ID
+    if (currentVideo) {
+      removeFace(currentVideo.id, faceId);
+    } else {
+      toast({
+        title: 'Error',
+        description: 'No active video selected',
+        variant: 'destructive'
+      });
+    }
+  }
+};
+
+// STEP 2: Find the JSX code that renders each face card
+// Look for code near text like "Unlabeled Faces" or where paginatedUnlabeledFaces is mapped
+// It will likely look something like this (though details may vary):
+
+{paginatedUnlabeledFaces.map((face) => (
+  <div 
+    key={face.id}
+    className="relative overflow-hidden rounded-md border"
+    onClick={() => toggleFaceSelection(face)}
+  >
+    <Image 
+      src={face.imageUrl} 
+      alt="Face" 
+      width={100} 
+      height={100} 
+      className="object-cover w-full h-full"
+    />
+    
+    {/* ADD THE REMOVE BUTTON HERE - add this code inside the face card div */}
+    <Button 
+      variant="ghost" 
+      size="icon" 
+      className="absolute top-1 right-1 opacity-50 hover:opacity-100 bg-slate-900/30"
+      onClick={(e) => handleRemoveFace(e, face.id)} 
+      title="Remove face"
+    >
+      <Trash2 className="h-4 w-4 text-red-400" />
+    </Button>
+    
+    {/* The rest of your existing face card JSX */}
+  </div>
+))}
+
+// STEP 3: Make sure the parent element that contains the face card has position: relative
+// This ensures the absolutely positioned remove button appears correctly
+
+// IMPORTANT: The exact details of your JSX structure may vary
+// You need to adapt this code to match your specific implementation
+// The key is to add the Button component inside each face card

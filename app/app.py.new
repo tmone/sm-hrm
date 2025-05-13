@@ -1,0 +1,439 @@
+import gradio as gr
+import os
+import json
+import tempfile
+import shutil
+from typing import List, Optional
+from fastapi import FastAPI, Depends, HTTPException, status, Request, UploadFile, File, Form
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
+import uvicorn
+from datetime import datetime, timedelta
+from pydantic import BaseModel
+
+# Import database and models
+from db.database import get_db
+from db import models, auth
+from db.init_db import init_db
+from db.face_detection import face_detector
+from db.face_cache import face_cache
+
+# Initialize the database
+init_db()
+
+# Pydantic models for API requests and responses
+class UserBase(BaseModel):
+    username: str
+    email: str
+    full_name: str
+
+class UserCreate(UserBase):
+    password: str
+
+class UserResponse(UserBase):
+    id: int
+    is_active: bool
+    is_admin: bool
+
+    class Config:
+        orm_mode = True
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+# Create FastAPI app
+app = FastAPI(title="StepmediaHRM API")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:9002", "http://127.0.0.1:9002"],  # Frontend URLs
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept"],
+)
+
+# Mount static files directory to serve face images
+static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# Set up OAuth2
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/token")
+
+# Dependency to get current user
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    token_data = auth.get_user_from_token(token)
+    if token_data is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    user = db.query(models.User).filter(models.User.username == token_data.username).first()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Inactive user",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+# Dependency to get current admin user
+async def get_current_admin(current_user: models.User = Depends(get_current_user)):
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions",
+        )
+    return current_user
+
+# API endpoints
+@app.get("/api/hello")
+def hello():
+    return {"message": "Hello from Python backend!"}
+
+# Login endpoint to get token
+@app.post("/api/token", response_model=auth.Token)
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.username == form_data.username).first()
+    if not user or not auth.verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    access_token_expires = timedelta(minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = auth.create_access_token(
+        data={"sub": user.username, "is_admin": user.is_admin},
+        expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+# Get current user info
+@app.get("/api/users/me", response_model=UserResponse)
+async def read_users_me(current_user: models.User = Depends(get_current_user)):
+    return current_user
+
+# Admin endpoint to get all users
+@app.get("/api/users", response_model=List[UserResponse])
+async def read_users(skip: int = 0, limit: int = 100, current_user: models.User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    users = db.query(models.User).offset(skip).limit(limit).all()
+    return users
+
+# Create new user (admin only)
+@app.post("/api/users", response_model=UserResponse)
+async def create_user(user: UserCreate, current_user: models.User = Depends(get_current_admin), db: Session = Depends(get_db)):
+    db_user = db.query(models.User).filter(models.User.username == user.username).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+
+    db_email = db.query(models.User).filter(models.User.email == user.email).first()
+    if db_email:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    hashed_password = auth.get_password_hash(user.password)
+    db_user = models.User(
+        username=user.username,
+        email=user.email,
+        full_name=user.full_name,
+        hashed_password=hashed_password
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+# Facial recognition API
+@app.post("/api/recognize-face")
+async def recognize_face(file_data: dict, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # This would be integrated with actual facial recognition logic
+    # For now, it's a placeholder
+    return {"message": "Face recognition API", "status": "success"}
+
+# Create a new face processing session
+@app.post("/api/face-sessions")
+async def create_face_session():
+    """Create a new session for face processing"""
+    session_id = face_cache.create_session()
+    return {
+        "message": "Face processing session created",
+        "status": "success",
+        "session_id": session_id
+    }
+
+# Get all face processing sessions
+@app.get("/api/face-sessions")
+async def get_face_sessions():
+    """Get all face processing sessions"""
+    sessions = face_cache.get_all_sessions()
+    return {
+        "message": "Face sessions retrieved",
+        "status": "success",
+        "sessions": sessions
+    }
+
+# Get details of a specific session
+@app.get("/api/face-sessions/{session_id}")
+async def get_face_session(session_id: str):
+    """Get a specific face processing session"""
+    session = face_cache.get_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session not found: {session_id}"
+        )
+    
+    return {
+        "message": "Session retrieved",
+        "status": "success",
+        "session": session
+    }
+
+# Delete a session
+@app.delete("/api/face-sessions/{session_id}")
+async def delete_face_session(session_id: str):
+    """Delete a face processing session"""
+    success = face_cache.delete_session(session_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session not found or could not be deleted: {session_id}"
+        )
+    
+    return {
+        "message": "Session deleted",
+        "status": "success"
+    }
+
+# Complete a session
+@app.post("/api/face-sessions/{session_id}/complete")
+async def complete_face_session(session_id: str):
+    """Mark a session as completed"""
+    success = face_cache.complete_session(session_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session not found: {session_id}"
+        )
+    
+    return {
+        "message": "Session marked as completed",
+        "status": "success"
+    }
+
+# Video processing API for face detection
+@app.post("/api/process-video")
+async def process_video(video: UploadFile = File(...),
+                        sample_rate: int = Form(10),
+                        session_id: Optional[str] = Form(None)):
+    """
+    Process a video file and extract faces using YOLO face detection.
+    
+    Args:
+        video: The video file to process
+        sample_rate: Process every N frames (default: 10)
+        session_id: Optional session ID for continuing an existing session
+    
+    Returns:
+        List of detected faces with metadata
+    """
+    # Create a new session if none provided
+    if not session_id:
+        session_id = face_cache.create_session()
+        print(f"Created new face processing session: {session_id}")
+    else:
+        # Verify session exists
+        session = face_cache.get_session(session_id)
+        if not session:
+            session_id = face_cache.create_session()
+            print(f"Provided session not found, created new session: {session_id}")
+    
+    detected_faces = []
+    error_occurred = False
+    error_message = ""
+    
+    try:
+        # Create a temporary file
+        suffix = os.path.splitext(video.filename)[1]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            # Write the uploaded video to the temporary file
+            shutil.copyfileobj(video.file, temp_file)
+            temp_path = temp_file.name
+        
+        print(f"Processing video in session {session_id}")
+        
+        # Process the video
+        try:
+            detected_faces = face_detector.process_video(temp_path, sample_rate=sample_rate)
+            print(f"Detected {len(detected_faces)} faces in video")
+            
+            # Add faces to the cache
+            for face in detected_faces:
+                # Extract the actual file path from the imageUrl
+                face_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), face['imageUrl'].lstrip('/'))
+                
+                # Add to the cache
+                face_cache.add_face(session_id, face_path, {
+                    "timestamp": face['timestamp'],
+                    "confidence": face.get('confidence', 1.0),
+                    "frameNumber": face.get('frameNumber', 0)
+                })
+                
+        except Exception as e:
+            print(f"Error during face detection: {str(e)}")
+            error_occurred = True
+            error_message = str(e)
+        
+        # Clean up
+        try:
+            os.unlink(temp_path)
+        except:
+            pass
+        
+        # Get updated session data
+        session = face_cache.get_session(session_id)
+        cached_faces = []
+        
+        if session and 'faces' in session:
+            cached_faces = [{
+                'id': face['id'],
+                'imageUrl': face['imageUrl'],
+                'timestamp': face['metadata'].get('timestamp', '00:00:00'),
+                'assigned': face['assigned'],
+                'assignedTo': face.get('assignedTo', None),
+                'confidence': face['metadata'].get('confidence', 1.0)
+            } for face in session['faces']]
+        
+        # Return face details
+        return {
+            "message": f"Processed video in session {session_id}" + 
+                      (f" with error: {error_message}" if error_occurred else f" and found {len(detected_faces)} faces"),
+            "status": "partial_success" if error_occurred else "success",
+            "error": error_message if error_occurred else None,
+            "session_id": session_id,
+            "faces": cached_faces
+        }
+    
+    except Exception as e:
+        print(f"Error processing video: {str(e)}")
+        # Try to return any faces that were detected before the error
+        session = face_cache.get_session(session_id)
+        cached_faces = []
+        
+        if session and 'faces' in session:
+            cached_faces = [{
+                'id': face['id'],
+                'imageUrl': face['imageUrl'],
+                'timestamp': face['metadata'].get('timestamp', '00:00:00'),
+                'assigned': face['assigned'],
+                'assignedTo': face.get('assignedTo', None),
+                'confidence': face['metadata'].get('confidence', 1.0)
+            } for face in session['faces']]
+            
+        if cached_faces:
+            return {
+                "message": f"Partial processing of video due to error: {str(e)}",
+                "status": "partial_success",
+                "error": str(e),
+                "session_id": session_id,
+                "faces": cached_faces
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error processing video: {str(e)}"
+            )
+
+# Assign detected face to an employee
+@app.post("/api/assign-face")
+async def assign_face(face_id: str = Form(...),
+                     employee_id: str = Form(...),
+                     session_id: str = Form(...),
+                     employee_name: str = Form(None),
+                     db: Session = Depends(get_db)):
+    """
+    Assign a detected face to an employee.
+    This would typically update a database record.
+    """
+    try:
+        # Verify session exists
+        session = face_cache.get_session(session_id)
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Session not found: {session_id}"
+            )
+            
+        # If employee name not provided, try to get it from the database
+        if not employee_name:
+            # In a real app, you would query the employee table
+            # For now, we'll use a mock name
+            employee_name = f"Employee {employee_id}"
+            
+        # Assign the face in the cache
+        success = face_cache.assign_face(session_id, face_id, employee_id, employee_name)
+        
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Face not found in session: {face_id}"
+            )
+        
+        return {
+            "message": f"Successfully assigned face {face_id} to employee {employee_id}",
+            "status": "success"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error assigning face: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error assigning face: {str(e)}"
+        )
+
+# Gradio interface for facial recognition demo
+with gr.Blocks() as demo:
+    gr.Markdown("# StepmediaHRM Facial Recognition")
+    with gr.Row():
+        input_image = gr.Image(type="pil", label="Upload Face")
+        output_text = gr.Textbox(label="Recognition Result")
+
+    submit_btn = gr.Button("Recognize")
+
+    def recognize_face(image):
+        # Placeholder for actual facial recognition logic
+        if image is None:
+            return "No image provided"
+        return "Employee recognized: John Doe"
+
+    submit_btn.click(fn=recognize_face, inputs=input_image, outputs=output_text)
+
+# Mount the Gradio app
+app.mount("/", gr.routes.App(demo))
+
+# Startup and shutdown events
+@app.on_event("startup")
+async def startup_event():
+    print("Application startup")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    print("Application shutdown")
+
+if __name__ == "__main__":
+    # Get port from environment variable or use default
+    port = int(os.environ.get("PORT", 7860))
+    print(f"Starting server at http://127.0.0.1:{port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)

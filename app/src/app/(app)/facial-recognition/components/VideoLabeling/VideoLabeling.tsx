@@ -111,6 +111,8 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
   const [isRemoveFromGroupDialogOpen, setIsRemoveFromGroupDialogOpen] = useState(false);
   const [faceToDelete, setFaceToDelete] = useState<DetectedFace | null>(null);
   const [faceToRemove, setFaceToRemove] = useState<DetectedFace | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isRemoving, setIsRemoving] = useState(false);
   
   // Face filtering
   const [filterLabeled, setFilterLabeled] = useState<boolean>(false);
@@ -395,6 +397,7 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
   const handleDeleteFace = async () => {
     if (!faceToDelete) return;
     
+    setIsDeleting(true);
     try {
       // Call the API to delete the face
       await deleteFace(videoId, faceToDelete.id);
@@ -407,20 +410,30 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
         setIdentityFaces(prevFaces => prevFaces.filter(face => face.id !== faceToDelete?.id));
       }
       
-      // Show success message
+      // Show detailed success message
+      const faceId = faceToDelete.id.substring(0, 8);
       toast({
-        title: "Face deleted",
-        description: "The face has been permanently deleted",
+        title: "Face deleted successfully",
+        description: `Face ID ${faceId}... has been permanently deleted from the system`,
+        variant: "default",
       });
       
       // Close the dialog
       setIsDeleteFaceDialogOpen(false);
       setFaceToDelete(null);
+      
+      // If we're viewing a group, we should refresh the whole list after a small delay
+      // to make sure everything is in sync with the backend
+      setTimeout(() => {
+        loadFaces();
+        setIsDeleting(false);
+      }, 500);
     } catch (error) {
+      setIsDeleting(false);
       console.error('Error deleting face:', error);
       toast({
         title: "Failed to delete face",
-        description: "An error occurred while trying to delete the face",
+        description: `Error: ${error instanceof Error ? error.message : "Server communication error"}. Please try again.`,
         variant: "destructive"
       });
     }
@@ -430,6 +443,7 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
   const handleRemoveFaceFromGroup = async () => {
     if (!faceToRemove || !faceToRemove.identity_code) return;
     
+    setIsRemoving(true);
     try {
       // Call the API to remove the face from the group
       await removeFaceFromGroup(faceToRemove.identity_code, faceToRemove.id);
@@ -449,20 +463,31 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
         setIdentityFaces(prevFaces => prevFaces.filter(face => face.id !== faceToRemove?.id));
       }
       
-      // Show success message
+      // Show detailed success message
+      const faceId = faceToRemove.id.substring(0, 8);
+      const groupId = faceToRemove.identity_code;
       toast({
         title: "Face removed from group",
-        description: "The face has been removed from the group and is now an individual face",
+        description: `Face ID ${faceId}... has been removed from group ${groupId} and is now an individual face`,
+        variant: "default",
       });
       
       // Close the dialog
       setIsRemoveFromGroupDialogOpen(false);
       setFaceToRemove(null);
+      
+      // If we're viewing a group, we should refresh the whole list after a small delay
+      // to make sure everything is in sync with the backend
+      setTimeout(() => {
+        loadFaces();
+        setIsRemoving(false);
+      }, 500);
     } catch (error) {
+      setIsRemoving(false);
       console.error('Error removing face from group:', error);
       toast({
         title: "Failed to remove from group",
-        description: "An error occurred while trying to remove the face from the group",
+        description: `Error: ${error instanceof Error ? error.message : "Server communication error"}. Please try again.`,
         variant: "destructive"
       });
     }
@@ -1052,12 +1077,18 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
           )}
           
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
             <AlertDialogAction 
               onClick={handleDeleteFace}
               className="bg-red-600 hover:bg-red-700"
+              disabled={isDeleting}
             >
-              Permanently Delete
+              {isDeleting ? (
+                <>
+                  <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-r-transparent"></div>
+                  Deleting...
+                </>
+              ) : "Permanently Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1092,12 +1123,18 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
           )}
           
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={isRemoving}>Cancel</AlertDialogCancel>
             <AlertDialogAction 
               onClick={handleRemoveFaceFromGroup}
               className="bg-blue-600 hover:bg-blue-700"
+              disabled={isRemoving}
             >
-              Remove from Group
+              {isRemoving ? (
+                <>
+                  <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-r-transparent"></div>
+                  Removing...
+                </>
+              ) : "Remove from Group"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

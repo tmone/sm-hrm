@@ -1,0 +1,243 @@
+import os
+import cv2
+import time
+import logging
+import hashlib
+from typing import Dict, List, Any, Optional, Callable, Tuple
+from datetime import datetime
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class VideoProcessor:
+    """
+    Handles video processing tasks for the facial recognition pipeline.
+    This includes:
+    1. Video validation (file format, MD5 checking)
+    2. Frame extraction at specified time intervals
+    """
+    
+    def __init__(self, upload_dir: str, frame_dir: str):
+        """
+        Initialize the video processor
+        
+        Args:
+            upload_dir: Directory where videos are uploaded
+            frame_dir: Directory where extracted frames will be saved
+        """
+        self.upload_dir = upload_dir
+        self.frame_dir = frame_dir
+        
+        # Create directories if they don't exist
+        os.makedirs(self.upload_dir, exist_ok=True)
+        os.makedirs(self.frame_dir, exist_ok=True)
+        
+        logger.info(f"Video processor initialized with upload_dir={upload_dir}, frame_dir={frame_dir}")
+    
+    def validate_video(self, data: Dict[str, Any], progress_callback: Callable) -> Dict[str, Any]:
+        """
+        Validate a video file and calculate its MD5 hash
+        
+        This is the 'upload' stage processor function
+        
+        Args:
+            data: Job data containing video_path
+            progress_callback: Callback function to report progress
+            
+        Returns:
+            Dict with validation results and next stage info
+        """
+        video_path = data.get('video_path')
+        if not video_path:
+            raise ValueError("No video path provided in job data")
+        
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        
+        progress_callback(10, "Validating video file")
+        
+        # Check if it's a valid video file
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                raise ValueError(f"Could not open video file: {video_path}")
+            
+            # Get video properties
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = frame_count / fps if fps > 0 else 0
+            
+            cap.release()
+            
+            progress_callback(30, "Computing video MD5 hash")
+            
+            # Calculate MD5 hash of the file
+            md5_hash = self._calculate_md5(video_path)
+            
+            progress_callback(90, "Video validation completed")
+            
+            # Prepare result with video info and next stage data
+            result = {
+                'valid': True,
+                'md5_hash': md5_hash,
+                'video_info': {
+                    'width': width,
+                    'height': height,
+                    'fps': fps,
+                    'frame_count': frame_count,
+                    'duration': duration,
+                    'file_size': os.path.getsize(video_path)
+                },
+                'next_stage': 'extraction',
+                'next_data': {
+                    'video_path': video_path,
+                    'time_window_ms': 100,  # Default to 100ms intervals
+                    'md5_hash': md5_hash
+                }
+            }
+            
+            return result
+            
+        except Exception as e:
+            logger.exception(f"Error validating video: {str(e)}")
+            return {
+                'valid': False,
+                'error': str(e)
+            }
+    
+    def extract_frames(self, data: Dict[str, Any], progress_callback: Callable) -> Dict[str, Any]:
+        """
+        Extract frames from a video at specified time intervals
+        
+        This is the 'extraction' stage processor function
+        
+        Args:
+            data: Job data containing video_path and time_window_ms
+            progress_callback: Callback function to report progress
+            
+        Returns:
+            Dict with extraction results and next stage info
+        """
+        video_path = data.get('video_path')
+        time_window_ms = data.get('time_window_ms', 100)
+        md5_hash = data.get('md5_hash')
+        
+        if not video_path:
+            raise ValueError("No video path provided in job data")
+        
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        
+        progress_callback(10, "Opening video file")
+        
+        # Create a directory for this video's frames based on MD5 hash
+        video_id = md5_hash[:10] if md5_hash else os.path.basename(video_path).split('.')[0]
+        video_frame_dir = os.path.join(self.frame_dir, video_id)
+        os.makedirs(video_frame_dir, exist_ok=True)
+        
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                raise ValueError(f"Could not open video file: {video_path}")
+            
+            # Get video properties
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = frame_count / fps if fps > 0 else 0
+            
+            # Calculate frame sampling based on time window
+            frames_per_window = max(1, int((time_window_ms / 1000) * fps))
+            total_extracted_frames = frame_count // frames_per_window
+            
+            logger.info(f"Extracting frames from {video_path} at {time_window_ms}ms intervals")
+            logger.info(f"Video has {frame_count} frames at {fps} FPS, extracting ~{total_extracted_frames} frames")
+            
+            progress_callback(20, f"Extracting frames at {time_window_ms}ms intervals")
+            
+            extracted_frames = []
+            current_frame = 0
+            frame_number = 0
+            
+            while True:
+                # Read the next frame
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Process only at the specified intervals
+                if current_frame % frames_per_window == 0:
+                    # Calculate timestamp in milliseconds
+                    timestamp_ms = (current_frame / fps) * 1000
+                    
+                    # Save the frame
+                    frame_filename = f"frame_{frame_number:06d}_{int(timestamp_ms):08d}.jpg"
+                    frame_path = os.path.join(video_frame_dir, frame_filename)
+                    cv2.imwrite(frame_path, frame)
+                    
+                    # Add to our list of extracted frames
+                    extracted_frames.append({
+                        'frame_number': frame_number,
+                        'timestamp_ms': timestamp_ms,
+                        'frame_path': frame_path,
+                        'original_frame': current_frame
+                    })
+                    
+                    frame_number += 1
+                    
+                    # Update progress every 10 frames
+                    if frame_number % 10 == 0:
+                        progress_percent = min(90, 20 + (current_frame / frame_count) * 70)
+                        progress_callback(progress_percent, 
+                                         f"Extracted {frame_number} frames ({current_frame}/{frame_count})")
+                
+                current_frame += 1
+            
+            cap.release()
+            
+            progress_callback(95, f"Completed frame extraction, found {len(extracted_frames)} frames")
+            
+            # Prepare result with extracted frames info and next stage data
+            result = {
+                'video_id': video_id,
+                'frame_count': len(extracted_frames),
+                'frames_directory': video_frame_dir,
+                'next_stage': 'detection',
+                'next_data': {
+                    'video_id': video_id,
+                    'frame_directory': video_frame_dir,
+                    'frames': extracted_frames
+                }
+            }
+            
+            return result
+            
+        except Exception as e:
+            logger.exception(f"Error extracting frames: {str(e)}")
+            return {
+                'error': str(e)
+            }
+    
+    def _calculate_md5(self, file_path: str, chunk_size: int = 8192) -> str:
+        """
+        Calculate MD5 hash of a file
+        
+        Args:
+            file_path: Path to the file
+            chunk_size: Size of chunks to read
+            
+        Returns:
+            MD5 hash as a hex string
+        """
+        md5 = hashlib.md5()
+        
+        with open(file_path, 'rb') as f:
+            while True:
+                data = f.read(chunk_size)
+                if not data:
+                    break
+                md5.update(data)
+        
+        return md5.hexdigest()
