@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Access StepMedia HRM</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .card {
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1, h2 {
+            color: #333;
+        }
+        .btn {
+            display: inline-block;
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            text-decoration: none;
+            border-radius: 4px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .btn:hover {
+            background-color: #45a049;
+        }
+        code {
+            background-color: #f5f5f5;
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>StepMedia HRM Access Page</h1>
+    <div class="card">
+        <h2>Application Access Links</h2>
+        <p>Click one of the following links to access the application:</p>
+        <p><a href="http://localhost:9002" target="_blank" class="btn">Open Next.js App (localhost)</a></p>
+        <p><a href="http://127.0.0.1:9002" target="_blank" class="btn">Open Next.js App (127.0.0.1)</a></p>
+        <p><a href="http://0.0.0.0:9002" target="_blank" class="btn">Open Next.js App (0.0.0.0)</a></p>
+    </div>
+
+    <div class="card">
+        <h2>Proxy Server Access</h2>
+        <p>If direct access doesn't work, try accessing through the proxy server:</p>
+        <p><a href="http://localhost:8080" target="_blank" class="btn">Access via Proxy (localhost)</a></p>
+        <p><a href="http://127.0.0.1:8080" target="_blank" class="btn">Access via Proxy (127.0.0.1)</a></p>
+    </div>
+
+    <div class="card">
+        <h2>Direct Backend Access</h2>
+        <p>You can also access the FastAPI backend directly:</p>
+        <p><a href="http://localhost:7860/docs" target="_blank" class="btn">Open FastAPI Docs</a></p>
+        <p><a href="http://127.0.0.1:7860/docs" target="_blank" class="btn">Open FastAPI Docs (127.0.0.1)</a></p>
+    </div>
+
+    <div class="card">
+        <h2>Login Information</h2>
+        <p>Use these credentials to log in:</p>
+        <ul>
+            <li><strong>Username:</strong> admin</li>
+            <li><strong>Password:</strong> admin123</li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <h2>Troubleshooting</h2>
+        <p>If you cannot access the application through the browser, try:</p>
+        <ol>
+            <li>Using a different browser</li>
+            <li>Using an incognito/private browsing window</li>
+            <li>Checking your browser's developer tools (F12) for error messages</li>
+            <li>Accessing through a command line tool like curl: <code>curl -v http://localhost:9002/login</code></li>
+            <li>If direct access doesn't work, try the proxy server links above</li>
+            <li>Clear your browser cache and cookies</li>
+            <li>Disable any browser extensions that might be interfering</li>
+        </ol>
+    </div>
+    
+    <div class="card">
+        <h2>Starting or Restarting the Application</h2>
+        <p>If you need to restart the application, use these commands:</p>
+        <ol>
+            <li><strong>Start the FastAPI backend:</strong>
+                <pre><code>cd /home/tmone/pinokio/api/StepmediaHRM/app
+python app.py</code></pre>
+            </li>
+            <li><strong>Start the Next.js frontend with environment variables:</strong>
+                <pre><code>cd /home/tmone/pinokio/api/StepmediaHRM/app
+NEXT_PUBLIC_PYTHON_BACKEND_URL="http://127.0.0.1:7860" JWT_SECRET="09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7" npm run dev</code></pre>
+            </li>
+            <li><strong>Start the proxy server (if needed):</strong>
+                <pre><code>cd /home/tmone/pinokio/api/StepmediaHRM/app
+node proxy.js</code></pre>
+            </li>
+        </ol>
+    </div>
+</body>
+</html>

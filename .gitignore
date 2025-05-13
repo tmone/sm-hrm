@@ -16,3 +16,24 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Logs and temporary files
+*.log
+*.pid
+app/*.log
+app/*.pid
+app/server.log
+app/app.log
+app/next.log
+app/proxy.log
+
+# Database files
+*.db
+app/hrm.db
+
+# Next.js
+app/.next/
+app/next-env.d.ts
+
+# Node modules
+app/node_modules/
