@@ -1776,6 +1776,99 @@ async def remove_face_from_identity_group(
         "message": f"Removed face {face_id} from identity {identity_id}"
     }
 
+# Custom endpoint for removing a face from any identity group
+@app.post("/api/custom/remove-face-from-group")
+async def custom_remove_face_from_group(
+    face_id: str = Body(..., embed=True),
+    current_user: dict = Depends(auth.get_current_user_optional)
+):
+    """Custom endpoint to remove a face from any identity group it belongs to"""
+    logger.info(f"Custom remove face from group API called for face_id: {face_id}")
+    
+    # First, find which identity group the face belongs to
+    face_identity = None
+    
+    # Look in groups
+    for identity_id, identity in identity_group_manager.identities.get("groups", {}).items():
+        if "face_ids" in identity and face_id in identity["face_ids"]:
+            face_identity = identity_id
+            break
+    
+    if not face_identity:
+        # If we can't find the identity, check face_memberships
+        face_identity = identity_group_manager.identities.get("face_memberships", {}).get(face_id)
+        
+    logger.info(f"Found face in identity group: {face_identity}")
+    
+    if not face_identity:
+        return {
+            "status": "success",
+            "message": f"Face {face_id} is not associated with any identity group"
+        }
+    
+    # Now update all videos that contain this face
+    updated_videos = []
+    for video in upload_manager.get_all_videos():
+        if "faces" in video:
+            updated = False
+            for face in video["faces"]:
+                if face["id"] == face_id:
+                    # Remove identity_code from the face
+                    if "identity_code" in face:
+                        del face["identity_code"]
+                        updated = True
+                    
+                    # Ensure labeled is set to false
+                    face["labeled"] = False
+                    updated = True
+            
+            if updated:
+                # Update the video record with explicit save
+                upload_manager.update_video_status(video["id"], video["processing_status"], {
+                    "faces": video["faces"]
+                })
+                # Force save
+                upload_manager._save_uploads()
+                updated_videos.append(video["id"])
+    
+    logger.info(f"Updated faces in videos: {updated_videos}")
+    
+    # Double-check that the identity group exists
+    identity = identity_group_manager.get_identity(face_identity)
+    if not identity:
+        logger.warning(f"Identity {face_identity} not found despite being referenced")
+        return {
+            "status": "partial_success",
+            "message": f"Removed face {face_id} from videos but couldn't find identity group {face_identity}"
+        }
+    
+    # Remove from the identity group
+    logger.info(f"Removing face {face_id} from identity group {face_identity}")
+    
+    # Check if face is in the group's face_ids list
+    if face_id in identity["face_ids"]:
+        logger.info(f"Face {face_id} found in identity {face_identity} face_ids list, removing...")
+        success = identity_group_manager.remove_face_from_identity(face_identity, face_id)
+        logger.info(f"Removed face from identity result: {success}")
+    else:
+        logger.warning(f"Face {face_id} not found in identity {face_identity} face_ids list")
+        # Remove it from face_memberships directly
+        if face_id in identity_group_manager.identities["face_memberships"]:
+            del identity_group_manager.identities["face_memberships"][face_id]
+            identity_group_manager._save_identities()
+            logger.info(f"Removed face {face_id} from face_memberships")
+            success = True
+        else:
+            logger.warning(f"Face {face_id} not found in face_memberships")
+            success = False
+    
+    return {
+        "status": "success", 
+        "message": f"Removed face {face_id} from identity {face_identity}",
+        "identity_id": face_identity,
+        "updated_videos": updated_videos
+    }
+
 @app.delete("/api/identity-groups/{identity_id}")
 async def delete_identity_group(
     identity_id: str,
