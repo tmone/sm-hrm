@@ -503,6 +503,42 @@ export async function deleteFace(videoId: string, faceId: string): Promise<any> 
 }
 
 /**
+ * Deletes multiple faces from a video
+ * This function sequentially deletes faces one by one
+ */
+export async function deleteMultipleFaces(videoId: string, faceIds: string[]): Promise<any> {
+  try {
+    // Since the server doesn't have a built-in bulk delete endpoint,
+    // we'll perform sequential deletes with a Promise.all for better performance
+    const results = await Promise.all(
+      faceIds.map(faceId => 
+        fetchFromAPI(`api/videos/${videoId}/faces/${faceId}`, {
+          method: 'DELETE'
+        })
+        .catch(error => {
+          console.error(`Error deleting face ${faceId} from video ${videoId}:`, error);
+          return { error: true, faceId, message: error instanceof Error ? error.message : 'Unknown error' };
+        })
+      )
+    );
+    
+    // Count successful and failed operations
+    const successful = results.filter(result => !result.error).length;
+    const failed = results.filter(result => result.error).length;
+    
+    return {
+      success: successful > 0,
+      successful,
+      failed,
+      results
+    };
+  } catch (error) {
+    console.error(`Error in batch deletion of faces for video ${videoId}:`, error);
+    throw error;
+  }
+}
+
+/**
  * Removes a face from an identity group but keeps it as an individual face
  * Uses a pure client-side approach since the server API is unreliable
  */

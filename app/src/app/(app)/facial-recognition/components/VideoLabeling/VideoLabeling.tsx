@@ -15,7 +15,8 @@ import {
   LayoutGrid, 
   List, 
   Users, 
-  Search
+  Search,
+  Trash2
 } from 'lucide-react';
 import { DetectedFace } from '../../types';
 import { 
@@ -23,8 +24,10 @@ import {
   createIdentityGroup, 
   fetchFromAPI, 
   deleteFace, 
+  deleteIdentityGroup,
   removeFaceFromGroup,
-  mergeIdentityGroups
+  mergeIdentityGroups,
+  deleteMultipleFaces
 } from '../../api';
 
 // Import our extracted components
@@ -35,7 +38,9 @@ import {
   GroupDialog,
   IdentityFacesDialog,
   DeleteFaceDialog,
-  RemoveFromGroupDialog
+  DeleteGroupDialog,
+  RemoveFromGroupDialog,
+  DeleteMultiFacesDialog
 } from './components';
 
 interface VideoLabelingProps {
@@ -137,10 +142,23 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
   // For face dialogs
   const [isDeleteFaceDialogOpen, setIsDeleteFaceDialogOpen] = useState(false);
   const [isRemoveFromGroupDialogOpen, setIsRemoveFromGroupDialogOpen] = useState(false);
+  const [isDeleteGroupDialogOpen, setIsDeleteGroupDialogOpen] = useState(false);
+  const [isDeleteMultiFacesDialogOpen, setIsDeleteMultiFacesDialogOpen] = useState(false);
   const [faceToDelete, setFaceToDelete] = useState<DetectedFace | null>(null);
   const [faceToRemove, setFaceToRemove] = useState<DetectedFace | null>(null);
+  const [groupToDelete, setGroupToDelete] = useState<{
+    identityCode: string;
+    representativeFace: {
+      imageUrl: string;
+      quality_score?: number;
+    };
+    faceCount: number;
+  } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [isRemoving, setIsRemoving] = useState(false);
+  const [isRemovingFromGroup, setIsRemovingFromGroup] = useState(false);
+  const [isDeletingGroup, setIsDeletingGroup] = useState(false);
+  const [isDeletingMultipleFaces, setIsDeletingMultipleFaces] = useState(false);
+  const [selectedFacesToDelete, setSelectedFacesToDelete] = useState<DetectedFace[]>([]);
   const [recentlyRemovedFaceId, setRecentlyRemovedFaceId] = useState<string | null>(null);
   
   // Face filtering
@@ -493,7 +511,7 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
   const handleRemoveFaceFromGroup = async () => {
     if (!faceToRemove || !faceToRemove.identity_code) return;
     
-    setIsRemoving(true);
+    setIsRemovingFromGroup(true);
     try {
       // Remember the face details for tracking and notification
       const faceId = faceToRemove.id.substring(0, 8);
@@ -558,7 +576,7 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
       });
       
       // 9. Reset loading state
-      setIsRemoving(false);
+      setIsRemovingFromGroup(false);
       
       // 10. Force a re-render to update any memoized values
       setTimeout(() => {
@@ -581,7 +599,7 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
     } catch (error) {
       // This catch block should never be reached with our pure client-side approach
       // But we'll keep it just in case
-      setIsRemoving(false);
+      setIsRemovingFromGroup(false);
       console.error('Error in client-side face removal:', error);
       toast({
         title: "Failed to remove from group",
@@ -774,6 +792,145 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
     setIsRemoveFromGroupDialogOpen(true);
   };
   
+  // Function to prompt group deletion
+  const promptDeleteGroup = (group: {
+    identityCode: string;
+    representativeFace: {
+      imageUrl: string;
+      quality_score?: number;
+    };
+    faceCount: number;
+  }) => {
+    setGroupToDelete(group);
+    setIsDeleteGroupDialogOpen(true);
+  };
+  
+  // Handle delete group
+  const handleDeleteGroup = async () => {
+    if (!groupToDelete) return;
+    
+    setIsDeletingGroup(true);
+    try {
+      // Get all faces that belong to this group
+      const groupFaces = faces.filter(face => face.identity_code === groupToDelete.identityCode);
+      
+      // Call the API to delete the group
+      await deleteIdentityGroup(groupToDelete.identityCode);
+      
+      // Update local state to remove the identity_code from all faces in the group
+      setFaces(prevFaces => 
+        prevFaces.map(face => {
+          if (face.identity_code === groupToDelete.identityCode) {
+            // Create a new face object without the identity_code
+            const { identity_code, ...restFace } = face;
+            return {
+              ...restFace,
+              labeled: false  // Mark as unlabeled
+            };
+          }
+          return face;
+        })
+      );
+      
+      // Show success message
+      toast({
+        title: "Group deleted successfully",
+        description: `Group ${groupToDelete.identityCode} with ${groupToDelete.faceCount} faces has been deleted. The faces are now individual faces.`,
+        variant: "default"
+      });
+      
+      // Close dialog
+      setIsDeleteGroupDialogOpen(false);
+      setGroupToDelete(null);
+      
+      // Refresh to get the updated data from the server after a delay
+      setTimeout(() => {
+        loadFaces();
+        setIsDeletingGroup(false);
+      }, 500);
+    } catch (error) {
+      console.error('Error deleting group:', error);
+      toast({
+        title: "Failed to delete group",
+        description: `Error: ${error instanceof Error ? error.message : "Server communication error"}. Please try again.`,
+        variant: "destructive"
+      });
+      setIsDeletingGroup(false);
+    }
+  };
+  
+  // Function to prompt deletion of multiple faces
+  const promptDeleteMultipleFaces = () => {
+    // Check how many faces are selected
+    const selectedFaceIds = Object.entries(selectedFaces)
+      .filter(([_, selected]) => selected)
+      .map(([faceId]) => faceId);
+    
+    if (selectedFaceIds.length === 0) {
+      toast({
+        title: 'No faces selected',
+        description: 'Please select at least one face to delete',
+        variant: 'destructive'
+      });
+      return;
+    }
+    
+    // Get the full face objects for the selected IDs
+    const facesToDelete = faces.filter(face => selectedFaceIds.includes(face.id));
+    
+    // Store the full face objects in state for use by the dialog
+    setSelectedFacesToDelete(facesToDelete);
+    
+    // Open the dialog
+    setIsDeleteMultiFacesDialogOpen(true);
+  };
+  
+  // Handle deleting multiple faces
+  const handleDeleteMultipleFaces = async () => {
+    if (!selectedFacesToDelete || selectedFacesToDelete.length === 0) return;
+    
+    setIsDeletingMultipleFaces(true);
+    
+    try {
+      // Get the IDs
+      const faceIdsToDelete = selectedFacesToDelete.map(face => face.id);
+      
+      // Call the API to delete the faces
+      const result = await deleteMultipleFaces(videoId, faceIdsToDelete);
+      
+      // Update local state to remove the deleted faces
+      setFaces(prevFaces => prevFaces.filter(face => !faceIdsToDelete.includes(face.id)));
+      
+      // Clear selection
+      setSelectedFaces({});
+      
+      // Show success message
+      toast({
+        title: "Faces deleted successfully",
+        description: `${result.successful} face${result.successful !== 1 ? 's' : ''} deleted successfully. ${result.failed > 0 ? `${result.failed} failed.` : ''}`,
+        variant: "default"
+      });
+      
+      // Close dialog
+      setIsDeleteMultiFacesDialogOpen(false);
+      setSelectedFacesToDelete([]);
+      
+      // Refresh to get the updated data from the server after a delay
+      setTimeout(() => {
+        loadFaces();
+        setIsDeletingMultipleFaces(false);
+      }, 500);
+    } catch (error) {
+      console.error('Error deleting multiple faces:', error);
+      toast({
+        title: "Failed to delete faces",
+        description: `Error: ${error instanceof Error ? error.message : "Server communication error"}. Please try again.`,
+        variant: "destructive"
+      });
+      setIsDeletingMultipleFaces(false);
+    }
+  };
+  
   const formatTimestamp = (timestamp: string) => {
     try {
       return new Date(timestamp).toLocaleTimeString([], {
@@ -855,6 +1012,16 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                   Merge ({selectedGroupCount + (Object.values(selectedFaces).filter(selected => selected).length)})
                 </Button>
                 
+                <Button 
+                  onClick={promptDeleteMultipleFaces}
+                  disabled={selectedFaceCount < 1}
+                  className="gap-2"
+                  variant="destructive"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete Selected ({selectedFaceCount})
+                </Button>
+                
                 <Button onClick={loadFaces} variant="outline">
                   <RefreshCw className="h-4 w-4" />
                 </Button>
@@ -919,6 +1086,7 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                         isSelected={selectedGroups[group.identityCode] || false}
                         onSelect={toggleGroupSelection}
                         onViewFaces={viewIdentityFaces}
+                        onDelete={promptDeleteGroup}
                       />
                     );
                   }
@@ -1169,8 +1337,26 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
         open={isRemoveFromGroupDialogOpen}
         onOpenChange={setIsRemoveFromGroupDialogOpen}
         faceToRemove={faceToRemove}
-        isRemoving={isRemoving}
+        isRemoving={isRemovingFromGroup}
         onRemove={handleRemoveFaceFromGroup}
+      />
+      
+      {/* Delete Group Dialog */}
+      <DeleteGroupDialog
+        open={isDeleteGroupDialogOpen}
+        onOpenChange={setIsDeleteGroupDialogOpen}
+        groupToDelete={groupToDelete}
+        isDeleting={isDeletingGroup}
+        onDelete={handleDeleteGroup}
+      />
+      
+      {/* Delete Multiple Faces Dialog */}
+      <DeleteMultiFacesDialog
+        open={isDeleteMultiFacesDialogOpen}
+        onOpenChange={setIsDeleteMultiFacesDialogOpen}
+        selectedFaces={selectedFacesToDelete}
+        isDeleting={isDeletingMultipleFaces}
+        onDelete={handleDeleteMultipleFaces}
       />
     </div>
   );

@@ -1,7 +1,9 @@
 import React from 'react';
 import Image from 'next/image';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Trash2 } from 'lucide-react';
 
 export interface GroupCardProps {
   identityCode: string;
@@ -13,6 +15,7 @@ export interface GroupCardProps {
   isSelected: boolean;
   onSelect: (groupId: string) => void;
   onViewFaces: (identityCode: string) => void;
+  onDelete: (group: { identityCode: string; representativeFace: { imageUrl: string; quality_score?: number }; faceCount: number }) => void;
 }
 
 const GroupCard: React.FC<GroupCardProps> = ({
@@ -21,8 +24,11 @@ const GroupCard: React.FC<GroupCardProps> = ({
   faceCount,
   isSelected,
   onSelect,
-  onViewFaces
+  onViewFaces,
+  onDelete
 }) => {
+  const group = { identityCode, representativeFace, faceCount };
+  
   return (
     <div 
       className={`border rounded-md overflow-hidden ${
@@ -40,6 +46,20 @@ const GroupCard: React.FC<GroupCardProps> = ({
           checked={isSelected}
           className="h-5 w-5 bg-white/80"
         />
+      </div>
+      
+      <div className="absolute top-1 right-1 z-10">
+        <Button
+          size="icon"
+          variant="destructive"
+          className="h-6 w-6 rounded-full bg-red-500/70 hover:bg-red-600/90"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(group);
+          }}
+        >
+          <Trash2 className="h-3 w-3 text-white" />
+        </Button>
       </div>
       
       <div 
