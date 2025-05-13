@@ -281,8 +281,8 @@ export async function uploadVideo(
     throw new ValidationError('Invalid file object provided for upload');
   }
   
-  // Check file size (100MB limit)
-  const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB in bytes
+  // Check file size (2GB limit)
+  const MAX_FILE_SIZE = 2048 * 1024 * 1024; // 2048MB (2GB) in bytes
   if (file.size > MAX_FILE_SIZE) {
     throw new ValidationError(`File size exceeds maximum allowed (${Math.round(MAX_FILE_SIZE/1024/1024)}MB)`);
   }

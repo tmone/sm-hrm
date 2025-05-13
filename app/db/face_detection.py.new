@@ -5,7 +5,7 @@ import uuid
 import tempfile
 import logging
 from datetime import datetime
-from typing import List, Dict, Any, Tuple, Optional, Callable
+from typing import List, Dict, Any, Tuple, Optional
 
 # Import face landmark and grouping modules
 from db.face_landmarks import face_landmark_detector, DLIB_AVAILABLE
@@ -145,7 +145,7 @@ class FaceDetector:
         # Set up identity group counter for automatic group creation
         self.next_identity_group = 1
 
-    def process_video(self, data: Dict[str, Any], progress_callback=None) -> Dict[str, Any]:
+    def process_video(self, data: Dict[str, Any], progress_callback: Callable) -> Dict[str, Any]:
         """
         Process video frames with continuous tracking
         
@@ -173,9 +173,7 @@ class FaceDetector:
                 'error': 'No frames provided'
             }
         
-        if progress_callback:
-            progress_callback(10, f"Processing {len(frames)} frames with tracking={enable_tracking}")
-        logger.info(f"Processing {len(frames)} frames with tracking={enable_tracking}")
+        progress_callback(10, f"Processing {len(frames)} frames with tracking={enable_tracking}")
         
         # Reset tracks
         self.tracks = []
@@ -337,13 +335,10 @@ class FaceDetector:
                 
                 # Update progress periodically
                 if i % 10 == 0:
-                    message = f"Processed {i}/{len(frames)} frames, found {len(detected_faces)} faces in {len(self.tracks)} tracks"
-                    logger.info(message)
-                    if progress_callback:
-                        progress_callback(
-                            min(90, 10 + (i / len(frames)) * 80), 
-                            message
-                        )
+                    progress_callback(
+                        min(90, 10 + (i / len(frames)) * 80), 
+                        f"Processed {i}/{len(frames)} frames, found {len(detected_faces)} faces in {len(self.tracks)} tracks"
+                    )
                 
                 # Store processing results for this frame
                 processing_results[frame_number] = {
@@ -360,10 +355,7 @@ class FaceDetector:
         if ADVANCED_FACE_PROCESSING and len(self.tracks) > 0:
             self._group_tracks_by_embeddings()
         
-        message = f"Completed processing {len(frames)} frames, found {len(detected_faces)} faces in {len(self.tracks)} tracks"
-        logger.info(message)
-        if progress_callback:
-            progress_callback(95, message)
+        progress_callback(95, f"Completed processing {len(frames)} frames, found {len(detected_faces)} faces in {len(self.tracks)} tracks")
         
         # Prepare result
         result = {
@@ -787,110 +779,6 @@ class FaceDetector:
         minutes, seconds = divmod(seconds, 60)
         hours, minutes = divmod(minutes, 60)
         return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
-        
-    def process_video_file(self, video_path: str, time_window_ms: int = 100) -> List[Dict[str, Any]]:
-        """
-        Process a video file for face detection using frame extraction
-        
-        Args:
-            video_path: Path to the video file
-            time_window_ms: Time window in milliseconds (used for compatibility)
-            
-        Returns:
-            List of detected faces
-        """
-        logger.info(f"Processing video file: {video_path}")
-        
-        try:
-            # Open the video
-            cap = cv2.VideoCapture(video_path)
-            if not cap.isOpened():
-                raise ValueError(f"Could not open video file: {video_path}")
-                
-            # Get video properties
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            
-            logger.info(f"Video info: {width}x{height}, {fps} FPS, {frame_count} frames")
-            
-            # Extract frames from the video first
-            frames = []
-            temp_frame_dir = os.path.join(tempfile.gettempdir(), f"video_frames_{uuid.uuid4()}")
-            os.makedirs(temp_frame_dir, exist_ok=True)
-            
-            try:
-                # Sample frames (use time_window_ms for frame sampling rate)
-                frames_per_sample = max(1, int((time_window_ms / 1000) * fps))
-                logger.info(f"Extracting frames (sampling every {frames_per_sample} frames)")
-                
-                current_frame = 0
-                frame_data_list = []
-                
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                        
-                    # Process every Nth frame
-                    if current_frame % frames_per_sample == 0:
-                        # Calculate timestamp
-                        timestamp_ms = int((current_frame / fps) * 1000)
-                        
-                        # Save frame to temp directory
-                        frame_filename = f"frame_{current_frame:06d}.jpg"
-                        frame_path = os.path.join(temp_frame_dir, frame_filename)
-                        cv2.imwrite(frame_path, frame)
-                        
-                        # Add frame metadata
-                        frame_data = {
-                            'frame_number': current_frame,
-                            'frame_path': frame_path,
-                            'timestamp_ms': timestamp_ms
-                        }
-                        frame_data_list.append(frame_data)
-                    
-                    current_frame += 1
-                    
-                    # Log progress
-                    if current_frame % 100 == 0:
-                        logger.info(f"Extracted {len(frame_data_list)} frames from {current_frame}/{frame_count}")
-                
-                # Release video after frame extraction
-                cap.release()
-                
-                # Prepare data for processing
-                process_data = {
-                    'frames': frame_data_list,
-                    'video_id': os.path.basename(video_path).split('.')[0],
-                    'frame_directory': temp_frame_dir,
-                    'enable_tracking': True,
-                    'fps': fps
-                }
-                
-                # Process frames with tracking
-                # Use a simple progress callback for logging
-                def log_progress(percent, message):
-                    logger.info(f"Processing progress: {percent:.1f}% - {message}")
-                
-                # Process the frames
-                result = self.process_video(process_data, log_progress)
-                
-                # Return the detected faces
-                return result.get('faces', [])
-                
-            finally:
-                # Clean up temp directory
-                try:
-                    import shutil
-                    shutil.rmtree(temp_frame_dir, ignore_errors=True)
-                except Exception as e:
-                    logger.error(f"Error cleaning up temp directory: {e}")
-            
-        except Exception as e:
-            logger.exception(f"Error processing video: {e}")
-            raise
     
     def _group_tracks_by_embeddings(self, similarity_threshold: float = 0.6):
         """

@@ -6,6 +6,7 @@ import shutil
 import io
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, Depends, HTTPException, status, Request, UploadFile, File, Form, BackgroundTasks, Body
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -138,6 +139,9 @@ app = FastAPI(
     description="Human Resource Management System API",
     version="0.1.0",
 )
+
+# Configure server to allow larger file uploads (2GB)
+app.state.MAX_FILE_SIZE = 2048 * 1024 * 1024  # 2048MB (2GB) in bytes
 
 # Configure CORS
 app.add_middleware(
@@ -593,6 +597,17 @@ async def upload_video(
 ):
     """Upload a video file for face detection processing"""
     
+    # Check file size against server limit (500MB)
+    file_size = 0
+    content = await video_file.read(1024)  # Read first chunk to check if file exists
+    file_size += len(content)
+    
+    # Seek back to beginning of file
+    await video_file.seek(0)
+    
+    # Get max file size from app state
+    max_file_size = getattr(app.state, "MAX_FILE_SIZE", 2048 * 1024 * 1024)  # Default to 2GB
+    
     # Create metadata with user info and description
     metadata = {
         "description": description,
@@ -614,6 +629,12 @@ async def upload_video(
         }
     except Exception as e:
         print(f"Error uploading video: {str(e)}")
+        # Check if it's a file size error coming from the client
+        if "File size exceeds" in str(e):
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File size exceeds maximum allowed ({max_file_size/(1024*1024):.0f}MB)"
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error uploading video: {str(e)}"

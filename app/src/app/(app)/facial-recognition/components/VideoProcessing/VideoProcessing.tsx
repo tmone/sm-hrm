@@ -170,11 +170,21 @@ export default function VideoProcessing() {
       setVideoFile(null);
     } catch (error) {
       console.error('Upload error:', error);
-      toast({
-        title: 'Upload failed',
-        description: 'There was an error uploading your video. Please try again.',
-        variant: 'destructive'
-      });
+      
+      // Provide more specific error messages based on error type
+      if (error instanceof ValidationError && error.message.includes('File size exceeds')) {
+        toast({
+          title: 'File too large',
+          description: error.message + '. Try compressing your video or splitting it into smaller segments.',
+          variant: 'destructive'
+        });
+      } else {
+        toast({
+          title: 'Upload failed',
+          description: 'There was an error uploading your video. Please try again.',
+          variant: 'destructive'
+        });
+      }
     } finally {
       setIsUploading(false);
       setUploadProgress(0);

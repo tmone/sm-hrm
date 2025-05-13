@@ -182,7 +182,7 @@ class BackgroundProcessor:
         try:
             # Process the video with our face detector using a time-based window
             # The face detector will save images to its own directory
-            detected_faces = face_detector.process_video(video_path, time_window_ms=100)
+            detected_faces = face_detector.process_video_file(video_path, time_window_ms=100)
             
             # Update the video record with the results
             upload_manager.update_video_status(video_id, "completed", {
