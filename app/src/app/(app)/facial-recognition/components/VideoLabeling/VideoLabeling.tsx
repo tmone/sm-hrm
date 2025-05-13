@@ -933,13 +933,48 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
   
   const formatTimestamp = (timestamp: string) => {
     try {
-      return new Date(timestamp).toLocaleTimeString([], {
+      const date = new Date(timestamp);
+      
+      // Check if the date is valid
+      if (isNaN(date.getTime())) {
+        // If timestamp can't be parsed as a date, try to extract time info from the filename
+        if (typeof timestamp === 'string' && timestamp.length > 0) {
+          // Extract time information from a UUID or filename if possible
+          const filenameParts = timestamp.split('/');
+          const filename = filenameParts[filenameParts.length - 1]; // Get the filename part
+          
+          if (filename) {
+            // Try to extract sequence number from filename (assuming pattern like XXXXX-0001.jpg)
+            const sequenceMatch = filename.match(/[-_](\d{1,6})\.[a-zA-Z]+$/);
+            if (sequenceMatch && sequenceMatch[1]) {
+              return `#${parseInt(sequenceMatch[1])}`;
+            }
+            
+            // If we have a UUID-based filename, format it nicely
+            if (filename.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-zA-Z]+$/i)) {
+              return "UUID-based";
+            }
+            
+            // Extract just the filename without extension
+            const noExtension = filename.replace(/\.[^/.]+$/, "");
+            // Truncate if too long
+            return noExtension.length > 10 ? noExtension.substring(0, 10) + "..." : noExtension;
+          }
+        }
+        
+        // If all else fails, show "Frame" instead of Invalid Date
+        return "Frame";
+      }
+      
+      // Format the valid date
+      return date.toLocaleTimeString([], {
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit'
       });
     } catch (e) {
-      return timestamp;
+      // Fallback to showing "Frame" instead of the timestamp
+      return "Frame";
     }
   };
   
@@ -966,7 +1001,7 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
       
       <div className="flex flex-col gap-4">
         <Card>
-          <CardHeader className="pb-3 sticky top-0 z-10 bg-background border-b">
+          <CardHeader className="pb-3 sticky top-0 z-20 bg-background border-b shadow-sm">
             <div className="flex items-center justify-between">
               <div>
                 <CardTitle>Face Management</CardTitle>
@@ -975,7 +1010,7 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                 </CardDescription>
               </div>
               
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap md:flex-nowrap">
                 <div className="flex items-center space-x-2">
                   <Checkbox 
                     id="filter-labeled" 
@@ -1110,7 +1145,7 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
               // List View
               <div className="rounded-md border">
                 <Table>
-                  <TableHeader>
+                  <TableHeader className="sticky top-[138px] z-10 bg-background">
                     <TableRow>
                       <TableHead className="w-12">
                         <Checkbox 

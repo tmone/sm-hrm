@@ -94,8 +94,9 @@ const FaceCard: React.FC<FaceCardProps> = ({
         )}
       </div>
       
-      <div className="p-2 text-xs font-medium bg-muted/30">
-        {formatTimestamp(face.timestamp)}
+      <div className="p-2 text-xs font-medium bg-muted/30 flex justify-between items-center">
+        <span>{formatTimestamp(face.timestamp)}</span>
+        {face.frameNumber && <span>Frame: {face.frameNumber}</span>}
       </div>
     </div>
   );
