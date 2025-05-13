@@ -67,11 +67,7 @@ export default function EmployeeRegistration() {
         setRegisteredFaces(Array.isArray(facesData) ? facesData : []);
       } catch (error) {
         console.error('Error fetching data:', error);
-        toast({
-          title: 'Failed to load data',
-          description: 'Could not fetch employees or face registration data',
-          variant: 'destructive'
-        });
+        // No toast notification for failed data load
       } finally {
         setIsLoading(false);
       }

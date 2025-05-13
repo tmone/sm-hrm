@@ -42,11 +42,7 @@ export default function VideoLabelingHub() {
       }
     } catch (error) {
       console.error('Error loading videos:', error);
-      toast({
-        title: 'Failed to load videos',
-        description: 'Could not load videos for face labeling',
-        variant: 'destructive'
-      });
+      // No toast notification for failed data load
     } finally {
       setIsLoading(false);
     }

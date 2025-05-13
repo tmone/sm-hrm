@@ -88,21 +88,7 @@ export default function VideoProcessing() {
       console.error('Error loading videos:', error);
       setIsLoadingError(true);
       
-      let errorMessage = 'Please try again later';
-      
-      if (error instanceof ValidationError) {
-        errorMessage = error.message;
-      } else if (error instanceof NetworkError) {
-        errorMessage = 'Network connection issue. Check your internet connection.';
-      } else if (error instanceof APIError) {
-        errorMessage = `Server error (${error.statusCode}). Please try again later.`;
-      }
-      
-      toast({
-        title: 'Failed to load videos',
-        description: errorMessage,
-        variant: 'destructive'
-      });
+      // No toast notification for failed data load
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -323,9 +309,9 @@ export default function VideoProcessing() {
     return (
       <div className="text-center p-8">
         <AlertCircle className="mx-auto h-12 w-12 text-red-500 mb-4" />
-        <h3 className="text-lg font-medium mb-2">Failed to load videos</h3>
+        <h3 className="text-lg font-medium mb-2">No data</h3>
         <p className="text-muted-foreground mb-4">
-          We couldn't load your videos. Please try again.
+          Please try again or upload a new video.
         </p>
         <Button 
           variant="outline" 
