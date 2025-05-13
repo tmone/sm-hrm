@@ -39,7 +39,7 @@ const FaceCard: React.FC<FaceCardProps> = ({
           </Badge>
         </div>
       )}
-      <div className="aspect-square relative">
+      <div className="aspect-square relative cursor-pointer" onClick={() => onSelect(face.id)}>
         <Image
           src={face.imageUrl}
           alt="Face"

@@ -63,8 +63,8 @@ const GroupCard: React.FC<GroupCardProps> = ({
       </div>
       
       <div 
-        className="aspect-square relative"
-        onClick={() => onViewFaces(identityCode)}
+        className="aspect-square relative cursor-pointer"
+        onClick={() => onSelect(identityCode)}
       >
         {/* Show the representative face of the group */}
         <Image
@@ -92,14 +92,19 @@ const GroupCard: React.FC<GroupCardProps> = ({
       </div>
       
       <div 
-        className="p-2 text-center font-medium bg-primary/10 text-primary flex items-center justify-between px-3"
-        onClick={() => onSelect(identityCode)}
+        className="p-2 text-center font-medium bg-primary/10 text-primary flex items-center justify-center px-3"
       >
-        <div>Select</div>
-        <div onClick={(e) => {
-          e.stopPropagation();
-          onViewFaces(identityCode);
-        }}>View Faces</div>
+        <Button 
+          size="sm" 
+          variant="secondary" 
+          className="mr-2" 
+          onClick={(e) => {
+            e.stopPropagation();
+            onViewFaces(identityCode);
+          }}
+        >
+          View Faces
+        </Button>
       </div>
     </div>
   );
