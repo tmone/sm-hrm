@@ -14,7 +14,14 @@ import { useToast } from '@/hooks/use-toast';
 import Image from 'next/image';
 import { Users, Search, Tag, UserPlus, ArrowLeft, RefreshCw, Filter, LayoutGrid, List, CheckCheck, Trash2, UserMinus } from 'lucide-react';
 import { DetectedFace, IdentityGroup } from '../../types';
-import { fetchFacesForVideo, createIdentityGroup, fetchFromAPI, deleteFace, removeFaceFromGroup } from '../../api';
+import { 
+  fetchFacesForVideo, 
+  createIdentityGroup, 
+  fetchFromAPI, 
+  deleteFace, 
+  removeFaceFromGroup,
+  mergeIdentityGroups
+} from '../../api';
 
 interface VideoLabelingProps {
   videoId: string;
@@ -105,6 +112,12 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
   const [selectedIdentity, setSelectedIdentity] = useState<string | null>(null);
   const [identityFaces, setIdentityFaces] = useState<DetectedFace[]>([]);
   const [isLoadingIdentityFaces, setIsLoadingIdentityFaces] = useState(false);
+  
+  // For group/face merging
+  const [selectedGroups, setSelectedGroups] = useState<Record<string, boolean>>({});
+  const [isMergeDialogOpen, setIsMergeDialogOpen] = useState(false);
+  const [isMerging, setIsMerging] = useState(false);
+  const [mergeMode, setMergeMode] = useState<'group-only' | 'mixed'>('group-only');
   
   // For face dialogs
   const [isDeleteFaceDialogOpen, setIsDeleteFaceDialogOpen] = useState(false);
@@ -572,6 +585,170 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
     }
   };
   
+  // Merge selected groups and faces function
+  const mergeSelectedGroups = async () => {
+    // Get the identity codes of the selected groups
+    const selectedGroupIds = Object.entries(selectedGroups)
+      .filter(([_, selected]) => selected)
+      .map(([groupId]) => groupId);
+      
+    // If we're in mixed mode, also check for individual faces to add to a group
+    const selectedIndividualFaces: DetectedFace[] = [];
+    let targetGroupId = '';
+    
+    // Find selected faces that are not already in groups regardless of merge mode
+    // This enables the ability to merge individual faces with groups or create new groups from selected faces
+    const selectedFaceIds = Object.entries(selectedFaces)
+      .filter(([_, selected]) => selected)
+      .map(([faceId]) => faceId);
+    
+    if (selectedFaceIds.length > 0) {
+      // Find faces that don't have an identity_code (individual faces)
+      selectedIndividualFaces.push(
+        ...faces.filter(face => 
+          selectedFaceIds.includes(face.id) && 
+          !face.identity_code
+        )
+      );
+    }
+    
+    // Various scenarios:
+    // 1. Only 1 group selected + individual faces
+    // 2. Multiple groups selected + individual faces
+    // 3. Only groups, no individual faces
+    // 4. No groups, only individual faces (should create a new group)
+    // 5. Multiple individual faces (should create a new group)
+    
+    const totalSelectedItems = selectedGroupIds.length + selectedIndividualFaces.length;
+    
+    if (totalSelectedItems === 0) {
+      toast({
+        title: 'Nothing selected',
+        description: 'Please select at least one group or individual face to merge',
+        variant: 'destructive'
+      });
+      return;
+    }
+    
+    if (selectedGroupIds.length === 0 && selectedIndividualFaces.length > 0) {
+      // This is just a regular group creation, not a merge
+      setIsMergeDialogOpen(false);
+      setIsGroupDialogOpen(true);
+      return;
+    }
+    
+    if (selectedGroupIds.length === 1 && selectedIndividualFaces.length === 0) {
+      toast({
+        title: 'Not enough items selected',
+        description: 'Please select at least two groups or add individual faces to merge with the group',
+        variant: 'destructive'
+      });
+      return;
+    }
+    
+    // If we have at least one individual face and one group, it's a valid merge
+    // This supports the case of merging individual faces with a group
+    
+    setIsMerging(true);
+    try {
+      let targetId = '';
+      const selectedIndividualFaceIds = selectedIndividualFaces.map(face => face.id);
+      
+      // First, if we have individual faces and at least 1 group, add faces to the first group
+      if (selectedIndividualFaces.length > 0 && selectedGroupIds.length > 0) {
+        // Sort group IDs to find the lowest one
+        const sortedIds = [...selectedGroupIds].sort((a, b) => {
+          const numA = parseInt(a.split('-')[1]);
+          const numB = parseInt(b.split('-')[1]);
+          return numA - numB;
+        });
+        
+        targetId = sortedIds[0]; // Use the lowest group ID
+        
+        // Add individual faces to this target group
+        const addResult = await createIdentityGroup(selectedIndividualFaceIds, targetId);
+        console.log("Added individual faces to target group:", addResult);
+      }
+      
+      // Now, if we have multiple groups, merge them
+      if (selectedGroupIds.length > 1) {
+        // Call the API to merge the groups
+        const result = await mergeIdentityGroups(selectedGroupIds);
+        targetId = result.target_id;
+      }
+      
+      // Update our local state
+      setFaces(prevFaces => 
+        prevFaces.map(face => {
+          // If face was in one of the source groups, update its identity_code
+          if (face.identity_code && selectedGroupIds.includes(face.identity_code) && face.identity_code !== targetId) {
+            return {
+              ...face,
+              identity_code: targetId,
+              labeled: true
+            };
+          }
+          // If face was an individual selected face
+          else if (selectedIndividualFaceIds.includes(face.id)) {
+            return {
+              ...face,
+              identity_code: targetId,
+              labeled: true
+            };
+          }
+          return face;
+        })
+      );
+      
+      // Clear selections
+      setSelectedGroups({});
+      setSelectedFaces({});
+      
+      // Show success message
+      let descriptionMessage = '';
+      if (selectedIndividualFaces.length > 0 && selectedGroupIds.length > 1) {
+        descriptionMessage = `Merged ${selectedGroupIds.length - 1} groups and ${selectedIndividualFaces.length} individual faces into ${targetId}`;
+      } else if (selectedIndividualFaces.length > 0) {
+        descriptionMessage = `Added ${selectedIndividualFaces.length} individual faces to group ${targetId}`;
+      } else {
+        descriptionMessage = `Merged ${selectedGroupIds.length - 1} groups into ${targetId}`;
+      }
+      
+      toast({
+        title: 'Merge successful',
+        description: descriptionMessage,
+      });
+      
+      // Close dialog
+      setIsMergeDialogOpen(false);
+      
+      // Refresh to get the updated data from the server
+      setTimeout(() => {
+        loadFaces();
+      }, 1000);
+    } catch (error) {
+      console.error('Error merging groups:', error);
+      toast({
+        title: 'Failed to merge',
+        description: 'An error occurred while merging the groups and faces',
+        variant: 'destructive'
+      });
+    } finally {
+      setIsMerging(false);
+    }
+  };
+  
+  // Toggle selection for a group
+  const toggleGroupSelection = (groupId: string) => {
+    setSelectedGroups(prev => ({
+      ...prev,
+      [groupId]: !prev[groupId]
+    }));
+  };
+  
+  // Get selected group count
+  const selectedGroupCount = Object.values(selectedGroups).filter(Boolean).length;
+  
   // Function to prompt face deletion (permanent)
   const promptDeleteFace = (face: DetectedFace) => {
     setFaceToDelete(face);
@@ -661,6 +838,20 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                   Group Selected ({selectedFaceCount})
                 </Button>
                 
+                <Button 
+                  onClick={() => {
+                    // Always set to mixed mode by default to support merging individual faces with groups
+                    setMergeMode('mixed');
+                    setIsMergeDialogOpen(true);
+                  }}
+                  disabled={selectedGroupCount + (Object.values(selectedFaces).filter(selected => selected).length) < 2}
+                  className="gap-2"
+                  variant="secondary"
+                >
+                  <Users className="h-4 w-4" />
+                  Merge ({selectedGroupCount + (Object.values(selectedFaces).filter(selected => selected).length)})
+                </Button>
+                
                 <Button onClick={loadFaces} variant="outline">
                   <RefreshCw className="h-4 w-4" />
                 </Button>
@@ -719,10 +910,27 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                     return (
                       <div 
                         key={`group-${group.identityCode}`} 
-                        className="border rounded-md overflow-hidden bg-primary/5 cursor-pointer hover:bg-primary/10 transition-colors"
-                        onClick={() => viewIdentityFaces(group.identityCode)}
+                        className={`border rounded-md overflow-hidden ${
+                          selectedGroups[group.identityCode] ? 'ring-2 ring-blue-500 bg-blue-50' : 'bg-primary/5'
+                        } cursor-pointer hover:bg-primary/10 transition-colors relative`}
                       >
-                        <div className="aspect-square relative">
+                        <div 
+                          className="absolute top-1 left-1 z-10" 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleGroupSelection(group.identityCode);
+                          }}
+                        >
+                          <Checkbox 
+                            checked={selectedGroups[group.identityCode] || false}
+                            className="h-5 w-5 bg-white/80"
+                          />
+                        </div>
+                        
+                        <div 
+                          className="aspect-square relative"
+                          onClick={() => viewIdentityFaces(group.identityCode)}
+                        >
                           {/* Show the representative face of the group */}
                           <Image
                             src={group.representativeFace.imageUrl}
@@ -733,12 +941,6 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                           
                           {/* Group badge */}
                           <div className="absolute inset-0 bg-black/30 flex flex-col items-center justify-center">
-                            <Badge 
-                              variant="outline" 
-                              className="px-3 py-1.5 text-lg font-semibold bg-white text-primary border-primary mb-2"
-                            >
-                              Group
-                            </Badge>
                             <div className="text-white font-bold text-lg">{group.identityCode}</div>
                             <div className="text-white/90 text-sm mt-1">{group.faceCount} faces</div>
                           </div>
@@ -754,8 +956,15 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                           )}
                         </div>
                         
-                        <div className="p-2 text-center font-medium bg-primary/10 text-primary">
-                          Click to view all faces
+                        <div 
+                          className="p-2 text-center font-medium bg-primary/10 text-primary flex items-center justify-between px-3"
+                          onClick={() => toggleGroupSelection(group.identityCode)}
+                        >
+                          <div>Select</div>
+                          <div onClick={(e) => {
+                            e.stopPropagation();
+                            viewIdentityFaces(group.identityCode);
+                          }}>View Faces</div>
                         </div>
                       </div>
                     );
@@ -766,14 +975,11 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                   return (
                     <div 
                       key={face.id} 
-                      className={`border rounded-md overflow-hidden ${
+                      className={`border rounded-md overflow-hidden relative ${
                         selectedFaces[face.id] ? 'ring-2 ring-primary' : ''
                       } ${
                         recentlyRemovedFaceId === face.id ? 'ring-2 ring-blue-500 animate-pulse' : ''
-                      } ${
-                        recentlyRemovedFaceId === face.id ? 'relative' : ''
                       }`}
-                      onClick={() => toggleFaceSelection(face.id)}
                     >
                       {recentlyRemovedFaceId === face.id && (
                         <div className="absolute inset-0 bg-blue-500/10 z-10 flex items-center justify-center pointer-events-none">
@@ -790,7 +996,15 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                           className="object-cover"
                         />
                         
-                        <div className="absolute top-1 right-1 flex gap-1">
+                        <div className="absolute top-1 left-1 z-10">
+                          <Checkbox 
+                            checked={selectedFaces[face.id] || false}
+                            className="h-5 w-5 bg-white/80"
+                            onClick={(e) => e.stopPropagation()}
+                            onCheckedChange={() => toggleFaceSelection(face.id)}
+                          />
+                        </div>
+                        <div className="absolute top-1 right-1">
                           <Button
                             size="icon"
                             variant="destructive"
@@ -802,12 +1016,6 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                           >
                             <Trash2 className="h-3 w-3 text-white" />
                           </Button>
-                          <Checkbox 
-                            checked={selectedFaces[face.id] || false}
-                            className="h-5 w-5 bg-white/80"
-                            onClick={(e) => e.stopPropagation()}
-                            onCheckedChange={() => toggleFaceSelection(face.id)}
-                          />
                         </div>
                         
                         {face.identity_code && (
@@ -927,18 +1135,18 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                         >
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <Button
-                                size="icon"
-                                variant="destructive"
-                                className="h-6 w-6 rounded-full"
-                                onClick={() => promptDeleteFace(face)}
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </Button>
                               <Checkbox 
                                 checked={selectedFaces[face.id] || false}
                                 onCheckedChange={() => toggleFaceSelection(face.id)}
                               />
+                              <Button
+                                size="icon"
+                                variant="destructive"
+                                className="h-6 w-6 rounded-full ml-1"
+                                onClick={() => promptDeleteFace(face)}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
                             </div>
                           </TableCell>
                           <TableCell>
@@ -1068,6 +1276,113 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
             <Button onClick={groupSelectedFaces}>
               <CheckCheck className="mr-2 h-4 w-4" />
               Confirm Grouping
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      
+      {/* Merge Groups Confirmation Dialog */}
+      <Dialog open={isMergeDialogOpen} onOpenChange={setIsMergeDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Merge Groups and Faces</DialogTitle>
+            <DialogDescription>
+              {selectedGroupCount > 0 ? (
+                <>
+                  You are about to merge selected items into a single identity.
+                  All faces will be merged into the group with the lowest ID number.
+                </>
+              ) : (
+                <>You are about to create a new group with the selected faces.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="py-4">
+            {selectedGroupCount > 0 && (
+              <>
+                <h4 className="font-medium mb-2">Selected Groups:</h4>
+                <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 border rounded-md">
+                  {Object.entries(selectedGroups)
+                    .filter(([_, selected]) => selected)
+                    .map(([groupId]) => {
+                      const group = processedFaces.groups.find(g => g.identityCode === groupId);
+                      if (!group) return null;
+                      
+                      return (
+                        <div key={groupId} className="p-2 border rounded flex flex-col items-center">
+                          <div className="relative h-24 w-24 mb-2 rounded-md overflow-hidden">
+                            <Image
+                              src={group.representativeFace.imageUrl}
+                              alt="Group representative"
+                              fill
+                              className="object-cover"
+                            />
+                          </div>
+                          <div className="font-medium">{group.identityCode}</div>
+                          <div className="text-sm text-muted-foreground">{group.faceCount} faces</div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </>
+            )}
+            
+            {/* Display selected individual faces */}
+            {Object.entries(selectedFaces).filter(([_, selected]) => selected).length > 0 && (
+              <>
+                <h4 className="font-medium mb-2 mt-4">Selected Individual Faces:</h4>
+                <div className="grid grid-cols-4 gap-2 max-h-40 overflow-y-auto p-2 border rounded-md">
+                  {Object.entries(selectedFaces)
+                    .filter(([_, selected]) => selected)
+                    .map(([faceId]) => {
+                      const face = faces.find(f => f.id === faceId && !f.identity_code);
+                      if (!face) return null; // Skip if face not found or is not an individual
+                      
+                      return (
+                        <div key={faceId} className="relative h-16 w-16 rounded-md overflow-hidden">
+                          <Image
+                            src={face.imageUrl}
+                            alt="Individual face"
+                            fill
+                            className="object-cover"
+                          />
+                        </div>
+                      );
+                    })}
+                </div>
+              </>
+            )}
+            
+            <div className="mt-4 p-3 bg-blue-50 text-blue-800 rounded-md">
+              <p className="text-sm">
+                <strong>Note:</strong> When merging, all items will be combined into the group with the lowest ID number. 
+                If only individual faces are selected, a new group will be created.
+                This operation cannot be undone.
+              </p>
+            </div>
+          </div>
+          
+          <DialogFooter>
+            <Button variant="outline" disabled={isMerging} onClick={() => setIsMergeDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={mergeSelectedGroups}
+              disabled={isMerging || (selectedGroupCount + Object.entries(selectedFaces).filter(([_, selected]) => selected).length < 2)}
+              className="gap-2"
+            >
+              {isMerging ? (
+                <>
+                  <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-r-transparent"></div>
+                  Merging...
+                </>
+              ) : (
+                <>
+                  <Users className="mr-2 h-4 w-4" />
+                  {selectedGroupCount > 0 ? "Confirm Merge" : "Create Group"}
+                </>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
