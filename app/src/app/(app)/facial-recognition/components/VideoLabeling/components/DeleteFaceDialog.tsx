@@ -46,11 +46,48 @@ const DeleteFaceDialog: React.FC<DeleteFaceDialogProps> = ({
         {faceToDelete && (
           <div className="py-4 flex justify-center">
             <div className="w-40 h-40 relative rounded overflow-hidden">
-              <Image
-                src={faceToDelete.imageUrl}
+              {/* Direct img tag instead of Next.js Image component for better reliability */}
+              <img
+                // Use face ID directly as the most reliable way to find the image
+                src={`/static/faces/${faceToDelete.id}.jpg`}
                 alt="Face to delete"
-                fill
-                className="object-cover"
+                className="absolute inset-0 w-full h-full object-cover"
+                onError={(e) => {
+                  console.warn(`Image not found: /static/faces/${faceToDelete.id}.jpg`);
+                  
+                  // Try fallback paths
+                  const fallbacks = [
+                    // Try with imageUrl from the face object
+                    faceToDelete.imageUrl,
+                    // Try with .png extension
+                    `/static/faces/${faceToDelete.id}.png`,
+                    // Try without optimization parameters if they exist
+                    faceToDelete.imageUrl?.split('?')[0],
+                    // Try with imageUrl field (some records use this instead)
+                    faceToDelete.image_url
+                  ].filter(Boolean); // Remove undefined entries
+                  
+                  // Use a recursive function to try all fallback paths
+                  const tryNextFallback = (index = 0) => {
+                    if (index >= fallbacks.length) {
+                      // All fallbacks failed, show a generic face placeholder
+                      console.error(`All image fallbacks failed for face ${faceToDelete.id}`);
+                      return;
+                    }
+                    
+                    const nextSrc = fallbacks[index];
+                    // @ts-ignore - Update the src attribute
+                    e.currentTarget.src = nextSrc;
+                    
+                    // Add onError handler to try the next fallback
+                    // @ts-ignore
+                    e.currentTarget.onerror = () => {
+                      tryNextFallback(index + 1);
+                    };
+                  };
+                  
+                  tryNextFallback();
+                }}
               />
             </div>
           </div>

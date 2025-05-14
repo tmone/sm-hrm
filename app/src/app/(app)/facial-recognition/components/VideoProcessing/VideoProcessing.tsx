@@ -102,18 +102,35 @@ export default function VideoProcessing() {
       // Handle case where taskStatus might be null
       if (!taskStatus) {
         console.error(`Received null task status for task ${taskId}`);
+        // Don't remove from polling - might be a temporary issue
+        // Just skip this update and try again later
         return;
       }
       
+      // Store task status in state
       setProcessingTasks(prev => ({
         ...prev,
         [taskId]: taskStatus
       }));
       
+      // Special handling for progress = -1, which indicates an uncertain status
+      // due to network or server errors
+      const isUncertainStatus = taskStatus.progress === -1;
+      
       // Update video status based on task
       setUploadedVideos(prev => {
         return prev.map(video => {
           if (video.task_id === taskId) {
+            // For uncertain status, keep the UI state as processing
+            // but don't update the backend status
+            if (isUncertainStatus) {
+              return {
+                ...video,
+                // Keep existing processing_status
+                ui_processing: true // Force UI to show as processing
+              };
+            }
+            
             return {
               ...video,
               processing_status: taskStatus.status,
@@ -124,14 +141,78 @@ export default function VideoProcessing() {
         });
       });
       
-      // Remove completed tasks from polling
-      if (taskStatus.status === 'completed' || taskStatus.status === 'failed') {
+      // Only remove completed tasks from polling
+      // For failed tasks, keep polling for a while in case the backend recovers
+      if (taskStatus.status === 'completed') {
         setPollingTasks(prev => prev.filter(id => id !== taskId));
+      } else if (taskStatus.status === 'failed') {
+        // For failed tasks, we'll keep polling for an additional 5 minutes (150 attempts at 2-second intervals)
+        // This gives the backend time to recover if it's just a temporary issue
+        
+        // Get current retry count from state or initialize it
+        const currentAttempt = taskStatus.retry_count || 0;
+        const MAX_RETRIES = 150; // 5 minutes of 2-second polling
+        
+        if (currentAttempt >= MAX_RETRIES) {
+          // Give up after max retries
+          setPollingTasks(prev => prev.filter(id => id !== taskId));
+          
+          // Update UI to show definitely failed
+          setUploadedVideos(prev => {
+            return prev.map(video => {
+              if (video.task_id === taskId) {
+                return {
+                  ...video,
+                  processing_status: 'failed',
+                  ui_processing: false
+                };
+              }
+              return video;
+            });
+          });
+        } else {
+          // Increment retry count
+          setProcessingTasks(prev => ({
+            ...prev,
+            [taskId]: {
+              ...taskStatus,
+              retry_count: currentAttempt + 1
+            }
+          }));
+          
+          // Keep in polling list
+          // The retry logic allows failed tasks to keep being polled
+          // in case the backend recovers
+        }
       }
     } catch (error) {
       console.error(`Error updating task status for ${taskId}:`, error);
-      // Remove problematic task ID from polling to prevent continuous errors
-      setPollingTasks(prev => prev.filter(id => id !== taskId));
+      
+      // For any errors in this function itself, we don't want to remove the task from polling immediately
+      // Instead, we'll track retry attempts
+      
+      // Get the task from state
+      const currentTask = processingTasks[taskId];
+      const currentAttempt = currentTask?.update_retry_count || 0;
+      const MAX_UPDATE_RETRIES = 10; // More reasonable limit for this function's errors
+      
+      if (currentAttempt >= MAX_UPDATE_RETRIES) {
+        // Remove from polling after max retries
+        setPollingTasks(prev => prev.filter(id => id !== taskId));
+      } else {
+        // Increment retry count
+        setProcessingTasks(prev => ({
+          ...prev,
+          [taskId]: {
+            ...(prev[taskId] || { 
+              task_id: taskId, 
+              video_id: '', 
+              status: 'processing' 
+            }),
+            update_retry_count: currentAttempt + 1
+          }
+        }));
+      }
     }
   };
 
@@ -191,28 +272,79 @@ export default function VideoProcessing() {
     }
   };
 
+  // Helper to check if a video is already being processed
+  const isVideoCurrentlyProcessing = (videoId: string): boolean => {
+    // Check if video exists in uploadedVideos and is marked as processing
+    const video = uploadedVideos.find(v => v.id === videoId);
+    if (!video) return false;
+    
+    // First check UI status
+    if (video.ui_processing) return true;
+    
+    // Then check processing status
+    if (video.processing_status === 'processing' || video.processing_status === 'pending') return true;
+    
+    // Then check if it has a task_id that's in the polling tasks
+    if (video.task_id && pollingTasks.includes(video.task_id)) return true;
+    
+    // Otherwise, it's not being processed
+    return false;
+  };
+
   const handleProcessVideo = async (videoId: string) => {
     try {
-      // Update UI state
+      // Safety check to prevent double processing
+      if (isVideoCurrentlyProcessing(videoId)) {
+        console.warn(`Attempted to process video ${videoId} which is already processing.`);
+        toast({
+          title: 'Already processing',
+          description: 'This video is already being processed. Please wait for it to complete.',
+          variant: 'default'
+        });
+        return;
+      }
+      
+      // Update UI state first to prevent duplicate clicks
       setUploadedVideos(prev => {
         return prev.map(video => {
           if (video.id === videoId) {
-            return { ...video, ui_processing: true };
+            return { 
+              ...video, 
+              ui_processing: true,
+              processing_status: 'pending' // Set to pending until we get a task
+            };
           }
           return video;
         });
       });
       
+      // Process the video
       const task = await processVideo(videoId);
+      
+      // Validate task response
+      if (!task || !task.task_id) {
+        throw new Error('Invalid task response from server');
+      }
       
       // Add task to processingTasks
       setProcessingTasks(prev => ({
         ...prev,
-        [task.task_id]: task
+        [task.task_id]: {
+          ...task,
+          last_updated: new Date().toISOString(), // Add timestamp for tracking
+          retry_count: 0,
+          update_retry_count: 0
+        }
       }));
       
       // Add task to polling
-      setPollingTasks(prev => [...prev, task.task_id]);
+      setPollingTasks(prev => {
+        // Prevent duplicate task IDs
+        if (prev.includes(task.task_id)) {
+          return prev;
+        }
+        return [...prev, task.task_id];
+      });
       
       // Update video with task info
       setUploadedVideos(prev => {
@@ -221,7 +353,8 @@ export default function VideoProcessing() {
             return {
               ...video,
               task_id: task.task_id,
-              processing_status: 'processing'
+              processing_status: task.status || 'processing',
+              ui_processing: true
             };
           }
           return video;
@@ -239,7 +372,14 @@ export default function VideoProcessing() {
       setUploadedVideos(prev => {
         return prev.map(video => {
           if (video.id === videoId) {
-            return { ...video, ui_processing: false };
+            return { 
+              ...video, 
+              ui_processing: false,
+              // Keep existing processing_status if it was already failed
+              processing_status: video.processing_status === 'failed' 
+                ? 'failed' 
+                : 'not_processed'
+            };
           }
           return video;
         });
@@ -247,7 +387,7 @@ export default function VideoProcessing() {
       
       toast({
         title: 'Processing failed',
-        description: 'There was an error processing your video. Please try again.',
+        description: 'There was an error starting the processing task. Please try again.',
         variant: 'destructive'
       });
     }

@@ -93,12 +93,54 @@ const MergeDialog: React.FC<MergeDialogProps> = ({
                 {selectedGroupsData.map(group => (
                   <div key={group.identityCode} className="p-2 border rounded flex flex-col items-center">
                     <div className="relative h-24 w-24 mb-2 rounded-md overflow-hidden">
-                      <Image
-                        src={group.representativeFace.imageUrl}
-                        alt="Group representative"
-                        fill
-                        className="object-cover"
-                      />
+                      {/* Direct img tag with enhanced error handling for better reliability */}
+                      <div className="relative w-full h-full">
+                        <img
+                          src={group.representativeFace.imageUrl}
+                          alt="Group representative"
+                          className="absolute inset-0 w-full h-full object-cover"
+                          onError={(e) => {
+                            console.warn(`Image not found: ${group.representativeFace.imageUrl}`);
+                            
+                            // Extract face ID from the URL if possible
+                            const faceIdMatch = group.representativeFace.imageUrl.match(/face_id=([^&]+)/);
+                            const faceId = faceIdMatch ? faceIdMatch[1] : null;
+                            
+                            // Try fallback paths
+                            const fallbacks = [
+                              // Try with direct face ID path first if we have it
+                              faceId ? `/static/faces/${faceId}.jpg` : null,
+                              // Try with direct URL - no image optimization
+                              group.representativeFace.imageUrl.replace('/api/python-bridge?endpoint=face_image', '/static/faces'),
+                              // Try with .png extension if we have face ID
+                              faceId ? `/static/faces/${faceId}.png` : null,
+                              // Try without optimization parameters if they exist
+                              group.representativeFace.imageUrl?.split('?')[0]
+                            ].filter(Boolean); // Remove undefined entries
+                            
+                            // Use a recursive function to try all fallback paths
+                            const tryNextFallback = (index = 0) => {
+                              if (index >= fallbacks.length) {
+                                // All fallbacks failed, show a generic face placeholder
+                                console.error(`All image fallbacks failed for group representative`);
+                                return;
+                              }
+                              
+                              const nextSrc = fallbacks[index];
+                              // @ts-ignore - Update the src attribute
+                              e.currentTarget.src = nextSrc;
+                              
+                              // Add onError handler to try the next fallback
+                              // @ts-ignore
+                              e.currentTarget.onerror = () => {
+                                tryNextFallback(index + 1);
+                              };
+                            };
+                            
+                            tryNextFallback();
+                          }}
+                        />
+                      </div>
                     </div>
                     <div className="font-medium">{group.identityCode}</div>
                     <div className="text-sm text-muted-foreground">{group.faceCount} faces</div>
@@ -115,12 +157,51 @@ const MergeDialog: React.FC<MergeDialogProps> = ({
               <div className="grid grid-cols-4 gap-2 max-h-40 overflow-y-auto p-2 border rounded-md">
                 {selectedIndividualFaces.map(face => (
                   <div key={face.id} className="relative h-16 w-16 rounded-md overflow-hidden">
-                    <Image
-                      src={face.imageUrl}
-                      alt="Individual face"
-                      fill
-                      className="object-cover"
-                    />
+                    {/* Direct img tag with enhanced error handling for better reliability */}
+                    <div className="relative w-full h-full">
+                      <img
+                        // Use face ID directly as the most reliable way to find the image
+                        src={`/static/faces/${face.id}.jpg`}
+                        alt="Individual face"
+                        className="absolute inset-0 w-full h-full object-cover"
+                        onError={(e) => {
+                          console.warn(`Image not found: /static/faces/${face.id}.jpg`);
+                          
+                          // Try fallback paths
+                          const fallbacks = [
+                            // Try with imageUrl from the face object
+                            face.imageUrl,
+                            // Try with .png extension
+                            `/static/faces/${face.id}.png`,
+                            // Try without optimization parameters if they exist
+                            face.imageUrl?.split('?')[0],
+                            // Try with imageUrl field (some records use this instead)
+                            face.image_url
+                          ].filter(Boolean); // Remove undefined entries
+                          
+                          // Use a recursive function to try all fallback paths
+                          const tryNextFallback = (index = 0) => {
+                            if (index >= fallbacks.length) {
+                              // All fallbacks failed, show a generic face placeholder
+                              console.error(`All image fallbacks failed for face ${face.id}`);
+                              return;
+                            }
+                            
+                            const nextSrc = fallbacks[index];
+                            // @ts-ignore - Update the src attribute
+                            e.currentTarget.src = nextSrc;
+                            
+                            // Add onError handler to try the next fallback
+                            // @ts-ignore
+                            e.currentTarget.onerror = () => {
+                              tryNextFallback(index + 1);
+                            };
+                          };
+                          
+                          tryNextFallback();
+                        }}
+                      />
+                    </div>
                   </div>
                 ))}
               </div>

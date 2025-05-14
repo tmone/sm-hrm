@@ -45,12 +45,51 @@ const RemoveFromGroupDialog: React.FC<RemoveFromGroupDialogProps> = ({
         {faceToRemove && (
           <div className="py-4 flex justify-center">
             <div className="w-40 h-40 relative rounded overflow-hidden">
-              <Image
-                src={faceToRemove.imageUrl}
-                alt="Face to remove from group"
-                fill
-                className="object-cover"
-              />
+              {/* Direct img tag with enhanced error handling for better reliability */}
+              <div className="relative w-full h-full">
+                <img
+                  // Use face ID directly as the most reliable way to find the image
+                  src={`/static/faces/${faceToRemove.id}.jpg`}
+                  alt="Face to remove from group"
+                  className="absolute inset-0 w-full h-full object-cover"
+                  onError={(e) => {
+                    console.warn(`Image not found: /static/faces/${faceToRemove.id}.jpg`);
+                    
+                    // Try fallback paths
+                    const fallbacks = [
+                      // Try with imageUrl from the face object
+                      faceToRemove.imageUrl,
+                      // Try with .png extension
+                      `/static/faces/${faceToRemove.id}.png`,
+                      // Try without optimization parameters if they exist
+                      faceToRemove.imageUrl?.split('?')[0],
+                      // Try with imageUrl field (some records use this instead)
+                      faceToRemove.image_url
+                    ].filter(Boolean); // Remove undefined entries
+                    
+                    // Use a recursive function to try all fallback paths
+                    const tryNextFallback = (index = 0) => {
+                      if (index >= fallbacks.length) {
+                        // All fallbacks failed, show a generic face placeholder
+                        console.error(`All image fallbacks failed for face ${faceToRemove.id}`);
+                        return;
+                      }
+                      
+                      const nextSrc = fallbacks[index];
+                      // @ts-ignore - Update the src attribute
+                      e.currentTarget.src = nextSrc;
+                      
+                      // Add onError handler to try the next fallback
+                      // @ts-ignore
+                      e.currentTarget.onerror = () => {
+                        tryNextFallback(index + 1);
+                      };
+                    };
+                    
+                    tryNextFallback();
+                  }}
+                />
+              </div>
             </div>
           </div>
         )}

@@ -24,9 +24,12 @@ export interface ProcessingTask {
   task_id: string;
   video_id: string;
   status: string;
-  progress?: number;
+  progress: number; // Making this required to match backend validation
   face_count?: number;
   error?: string;
+  retry_count?: number; // Added for our retry mechanism
+  update_retry_count?: number; // Added for our retry mechanism
+  last_updated?: string; // Added for tracking
 }
 
 export interface DetectedFace {

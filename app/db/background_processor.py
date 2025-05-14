@@ -133,7 +133,88 @@ class BackgroundProcessor:
         """Get the status of a background task"""
         if task_id in self.processing_results:
             return self.processing_results[task_id]
-        return {"status": "unknown", "task_id": task_id}
+        
+        # Return a response with all required fields to satisfy FastAPI validation
+        # Extract video_id from task_id if possible (task_id often has format task_video_id)
+        video_id = ""
+        if task_id.startswith("task_"):
+            video_id = task_id[5:]  # Remove "task_" prefix
+            
+        return {
+            "status": "unknown", 
+            "task_id": task_id,
+            "video_id": video_id,  # Required field for VideoProcessingResponse
+            "progress": 0.0,      # Required field for VideoProcessingResponse
+        }
+    
+    def recover_video_processing(self, video_id: str, task_id: str = None) -> bool:
+        """
+        Attempt to recover a video that failed processing but was mostly complete
+        
+        Args:
+            video_id: ID of the video to recover
+            task_id: Optional task ID (will be generated from video_id if not provided)
+            
+        Returns:
+            True if recovery was successful, False otherwise
+        """
+        print(f"Attempting to recover video processing for video {video_id}")
+        
+        # Generate task ID if not provided
+        if not task_id:
+            task_id = f"task_{video_id}"
+        
+        try:
+            # Get video details
+            video = upload_manager.get_video(video_id)
+            if not video:
+                print(f"Video {video_id} not found, cannot recover")
+                return False
+                
+            # Call face detector's recover function
+            detected_faces = face_detector.recover_processing(video_id)
+            
+            if not detected_faces:
+                print(f"No faces could be recovered for video {video_id}")
+                return False
+                
+            # Update the video record with the recovered faces
+            upload_manager.update_video_status(video_id, "completed", {
+                "detected_faces": len(detected_faces),
+                "processing_completed": datetime.now().isoformat(),
+                "processing_recovered": True,
+                "faces": [
+                    {
+                        "id": face["id"],
+                        "imageUrl": face["imageUrl"],
+                        "timestamp": face["timestamp"],
+                        "confidence": face.get("confidence", 1.0),
+                        "frameNumber": face.get("frameNumber", 0),
+                        "labeled": False
+                    } 
+                    for face in detected_faces
+                ]
+            })
+            
+            # Update task status
+            self.processing_results[task_id] = {
+                "status": "completed",
+                "progress": 100,
+                "task_id": task_id,
+                "video_id": video_id,
+                "face_count": len(detected_faces),
+                "recovered": True,
+                "completed_at": datetime.now().isoformat(),
+                "error": None
+            }
+            
+            print(f"Successfully recovered video {video_id} with {len(detected_faces)} faces")
+            return True
+            
+        except Exception as e:
+            print(f"Error recovering video {video_id}: {str(e)}")
+            traceback.print_exc()
+            return False
     
     def _worker_thread(self, worker_name: str):
         """Worker thread function that processes tasks from the queue"""

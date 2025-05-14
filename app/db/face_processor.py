@@ -405,45 +405,63 @@ class FaceProcessor:
         hours, minutes = divmod(minutes, 60)
         return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
     
-    def _remove_duplicates(self, faces: List[Dict[str, Any]], time_threshold: float = 0.5, max_faces: int = 1000) -> List[Dict[str, Any]]:
+    def _remove_duplicates(self, faces: List[Dict[str, Any]], time_threshold: float = 0.5, max_faces: int = 10000) -> List[Dict[str, Any]]:
         """
-        Remove duplicate faces based on timestamp proximity
-
+        Process all faces without removing duplicates (modified as requested by user)
+        
+        This function now keeps all faces but:
+        1. Sorts them by confidence (highest first)
+        2. Groups similar faces together by adding a group_id based on timestamp proximity
+        3. Returns all faces without filtering duplicates
+        
         Args:
             faces: List of detected faces
-            time_threshold: Time threshold in seconds (default: 0.5)
-            max_faces: Maximum number of faces to return (default: 1000)
-
+            time_threshold: Time threshold in seconds (used for grouping only)
+            max_faces: Maximum faces to process (increased to 10000)
+            
         Returns:
-            List of unique faces
+            All faces with grouping information
         """
-        # Sort by confidence
-        sorted_faces = sorted(faces, key=lambda x: x["confidence"], reverse=True)
-
-        # Filter faces that are within time_threshold of each other
-        unique_faces = []
-        used_timestamps = []
-
-        for face in sorted_faces:
-            # Extract timestamp in ms
+        logger.info(f"Processing {len(faces)} faces without removing duplicates")
+        
+        # Sort by confidence (highest confidence first)
+        sorted_faces = sorted(faces, key=lambda x: x.get("confidence", 0), reverse=True)
+        
+        # Limit to max_faces to prevent processing too many
+        if len(sorted_faces) > max_faces:
+            logger.warning(f"Limiting to {max_faces} faces (from {len(sorted_faces)} total)")
+            sorted_faces = sorted_faces[:max_faces]
+        
+        # Group similar faces by timestamp proximity
+        # This adds grouping without removing any faces
+        timestamp_groups = []  # List of timestamp groups
+        
+        for i, face in enumerate(sorted_faces):
             timestamp_ms = face.get("timestamp_ms", 0)
-
-            # Check if this face is too close to any already selected face
-            is_duplicate = False
-            for used_ts in used_timestamps:
-                if abs(timestamp_ms - used_ts) < time_threshold * 1000:  # Convert to ms
-                    is_duplicate = True
+            
+            # Try to find a matching group
+            group_found = False
+            for group_idx, group_timestamps in enumerate(timestamp_groups):
+                for group_ts in group_timestamps:
+                    if abs(timestamp_ms - group_ts) < time_threshold * 1000:  # Convert to ms
+                        # Add to existing group
+                        timestamp_groups[group_idx].append(timestamp_ms)
+                        face["similarity_group"] = f"group_{group_idx}"
+                        group_found = True
+                        break
+                if group_found:
                     break
-
-            if not is_duplicate:
-                unique_faces.append(face)
-                used_timestamps.append(timestamp_ms)
-
-            # Limit to max_faces - set to a much higher number to show more faces
-            if len(unique_faces) >= max_faces:
-                break
-
-        # Sort by timestamp
-        unique_faces = sorted(unique_faces, key=lambda x: x.get("timestamp_ms", 0))
-
-        return unique_faces
+            
+            # If no matching group, create a new one
+            if not group_found:
+                new_group_idx = len(timestamp_groups)
+                timestamp_groups.append([timestamp_ms])
+                face["similarity_group"] = f"group_{new_group_idx}"
+        
+        # Log group statistics
+        group_sizes = {f"group_{i}": len(timestamps) for i, timestamps in enumerate(timestamp_groups)}
+        logger.info(f"Grouped {len(sorted_faces)} faces into {len(timestamp_groups)} similarity groups")
+        logger.info(f"Group sizes: {group_sizes}")
+        
+        # Sort by timestamp for display consistency
+        return sorted(sorted_faces, key=lambda x: x.get("timestamp_ms", 0))

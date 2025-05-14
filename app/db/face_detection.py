@@ -52,7 +52,7 @@ class FaceTrack:
     """
     Represents a face tracked across multiple frames.
     """
-    def __init__(self, face_id: str, initial_box: np.ndarray, initial_frame: int, confidence: float = 0.7):
+    def __init__(self, face_id: str, initial_box: np.ndarray, initial_frame: int, confidence: float = 0.7, chunk_id: str = None):
         self.id = face_id  # Unique track ID (different from face ID)
         self.face_id = face_id  # Initial face ID, can be changed
         self.boxes = {initial_frame: initial_box}  # Frame number to box mapping
@@ -63,6 +63,7 @@ class FaceTrack:
         self.active = True
         self.missed_frames = 0
         self.embedding = None  # Face embedding for recognition
+        self.chunk_id = chunk_id  # Track which processing chunk this track belongs to
         
     def add_detection(self, frame_number: int, box: np.ndarray, confidence: float = None):
         """Add a new detection to this track"""
@@ -748,6 +749,15 @@ class FaceDetector:
             # Format timestamp for display
             timestamp = self._format_timestamp(timestamp_ms / 1000)
             
+            # Check if face is valid
+            if face is None or face.size == 0 or face.shape[0] == 0 or face.shape[1] == 0:
+                logger.warning(f"Invalid face image detected, cannot save")
+                return None
+                
+            # Convert to BGR if not already (sometimes faces can be grayscale)
+            if len(face.shape) == 2:  # Grayscale
+                face = cv2.cvtColor(face, cv2.COLOR_GRAY2BGR)
+                
             # Resize face to 128x128 pixels
             face_resized = cv2.resize(face, (128, 128), interpolation=cv2.INTER_AREA)
             
@@ -758,23 +768,47 @@ class FaceDetector:
             # Make sure directory exists
             os.makedirs(os.path.dirname(face_path), exist_ok=True)
             
-            # Save the resized face
-            cv2.imwrite(face_path, face_resized)
+            # Save the resized face with high quality (95%)
+            # PNG is lossless but larger, JPG is smaller but needs quality parameter
+            quality_params = [cv2.IMWRITE_JPEG_QUALITY, 95]
+            success = cv2.imwrite(face_path, face_resized, quality_params)
+            
+            if not success:
+                logger.warning(f"Failed to save face image to {face_path}")
+                # Try with PNG format instead
+                png_path = face_path.replace(".jpg", ".png")
+                png_success = cv2.imwrite(png_path, face_resized)
+                
+                if png_success:
+                    logger.info(f"Successfully saved face as PNG to {png_path}")
+                    # Update filename for the return value
+                    face_filename = face_filename.replace(".jpg", ".png")
+                else:
+                    logger.error(f"Failed to save face image in any format")
+                    return None
             
             # Convert to relative path for frontend
             relative_path = f"/static/faces/{face_filename}"
             
-            # Create basic face record
+            # Create basic face record with all necessary fields
             face_record = {
                 "id": face_id,
-                "imageUrl": relative_path,
+                "imageUrl": relative_path,  # This is the key expected by background_processor
+                "image_url": relative_path,  # Alternative key for backward compatibility
                 "timestamp": timestamp,
                 "timestamp_ms": timestamp_ms,
                 "frameNumber": frame_number,
                 "confidence": float(confidence) if confidence is not None else 0.5,
                 "labeled": False,
                 "identity_code": None,
-                "has_landmarks": False
+                "has_landmarks": False,
+                "metadata": {
+                    "timestamp": timestamp,
+                    "timestamp_ms": timestamp_ms,
+                    "frame": frame_number,
+                    "confidence": float(confidence) if confidence is not None else 0.5
+                },
+                "assigned": False
             }
             
             return face_record
@@ -788,6 +822,66 @@ class FaceDetector:
         hours, minutes = divmod(minutes, 60)
         return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
         
+    def recover_processing(self, video_id: str) -> List[Dict[str, Any]]:
+        """
+        Recovery function for partially processed videos
+        
+        Args:
+            video_id: ID of the video to recover
+            
+        Returns:
+            List of detected faces that were successfully processed
+        """
+        logger.info(f"Attempting to recover processing for video {video_id}")
+        
+        # Check if we have any faces already processed for this track
+        detected_faces = []
+        
+        # For each active track, extract saved faces
+        for track in self.tracks:
+            if track.active and hasattr(track, 'face_id'):
+                # Look for face images that were already saved
+                face_id = track.face_id
+                face_path = os.path.join(self.faces_dir, f"{face_id}.jpg")  # Must match _save_face format (line 756)
+                
+                if os.path.exists(face_path):
+                    # Create a face record for this saved face
+                    timestamp = "00:00:00"  # Default timestamp
+                    
+                    # Get a frame number if available
+                    frame_number = 0
+                    if hasattr(track, 'last_frame'):
+                        frame_number = track.last_frame
+                    
+                    # Create face record - use the SAME filename format as _save_face
+                    face_record = {
+                        "id": face_id,
+                        "imageUrl": f"/static/faces/{face_id}.jpg",  # Must match _save_face format (line 766)
+                        "image_url": f"/static/faces/{face_id}.jpg",  # Must match _save_face format
+                        "timestamp": timestamp,
+                        "confidence": track.confidence if hasattr(track, 'confidence') else 0.7,
+                        "frameNumber": frame_number,
+                        "labeled": False,
+                        "assigned": False,
+                        "identity_code": track.identity_code if hasattr(track, 'identity_code') else None,
+                        "metadata": {
+                            "timestamp": timestamp,
+                            "frame": frame_number,
+                            "confidence": track.confidence if hasattr(track, 'confidence') else 0.7
+                        }
+                    }
+                    
+                    detected_faces.append(face_record)
+                    logger.info(f"Recovered face {face_id} from track")
+        
+        # If we found faces, return them
+        if detected_faces:
+            logger.info(f"Successfully recovered {len(detected_faces)} faces")
+            return detected_faces
+        
+        logger.warning(f"No faces recovered for video {video_id}")
+        return []
+    
     def process_video_file(self, video_path: str, time_window_ms: int = 100) -> List[Dict[str, Any]]:
         """
         Process a video file for face detection using frame extraction
@@ -874,11 +968,51 @@ class FaceDetector:
                 def log_progress(percent, message):
                     logger.info(f"Processing progress: {percent:.1f}% - {message}")
                 
-                # Process the frames
-                result = self.process_video(process_data, log_progress)
+                try:
+                    # Process the frames
+                    result = self.process_video(process_data, log_progress)
+                    
+                    # Get the detected faces from the result
+                    faces = result.get('faces', [])
+                except Exception as e:
+                    logger.error(f"Error during video processing: {e}")
+                    logger.info("Attempting to recover partial results...")
+                    
+                    # Attempt to recover any faces that were already processed
+                    faces = []
+                    
+                    # If there are active tracks, we can recover faces from them
+                    if hasattr(self, 'tracks') and self.tracks:
+                        faces = self.recover_processing(os.path.basename(video_path).split('.')[0])
+                        
+                        if faces:
+                            logger.info(f"Recovered {len(faces)} faces after processing error")
+                        else:
+                            logger.warning("No faces could be recovered - results will be incomplete")
+                            # Re-raise the exception if we couldn't recover any faces
+                            if not faces:
+                                raise
                 
-                # Return the detected faces
-                return result.get('faces', [])
+                # Ensure the face records have the required fields for compatibility with background_processor
+                for face in faces:
+                    # Make sure each face has required fields
+                    if 'id' not in face:
+                        face['id'] = str(uuid.uuid4())
+                    if 'imageUrl' not in face and 'image_url' in face:
+                        face['imageUrl'] = face['image_url']
+                    elif 'imageUrl' not in face:
+                        # If no image URL, construct a default one
+                        face['imageUrl'] = f"/static/faces/{face['id']}.jpg"  # Must match _save_face format (line 766)
+                    if 'timestamp' not in face and 'timestamp_ms' in face:
+                        timestamp_ms = face['timestamp_ms']
+                        face['timestamp'] = self._format_timestamp(timestamp_ms / 1000)
+                    elif 'timestamp' not in face:
+                        face['timestamp'] = "00:00:00"
+                        
+                logger.info(f"Returning {len(faces)} processed faces")
+                
+                # Return the processed faces
+                return faces
                 
             finally:
                 # Clean up temp directory

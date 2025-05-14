@@ -27,8 +27,8 @@ class ParallelFaceProcessor:
     4. Supports splitting large videos for multi-threaded processing
     """
     
-    def __init__(self, max_workers: int = 4):
-        """Initialize the parallel face processor"""
+    def __init__(self, max_workers: int = 8):
+        """Initialize the parallel face processor with more workers for better parallelism"""
         # Set up directory paths
         self.base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
         self.static_dir = os.path.join(self.base_dir, "static")
@@ -256,27 +256,32 @@ class ParallelFaceProcessor:
                 'error': 'No frames provided'
             }
         
-        # For videos with tracking enabled, we can't split frames randomly
-        # Instead, split them into sequential blocks
-        if enable_tracking:
-            # Process frames sequentially in a single thread
-            from db.face_detection import face_detector
-            return face_detector.process_video(data, progress_callback)
+        # Even with tracking enabled, we'll split into sequential chunks for parallel processing
+        # We accept the possibility of losing track continuity at chunk boundaries
+        # This is a performance vs. accuracy tradeoff requested by the user
         
-        # If tracking is disabled, we can process frames in parallel
+        # Process frames in parallel in sequential chunks
         progress_callback(10, f"Setting up parallel face detection for {len(frames)} frames")
         
-        # Split frames into chunks
-        num_chunks = min(self.max_workers, max(1, len(frames) // 20))
-        chunk_size = len(frames) // num_chunks
+        # Split frames into sequential chunks for parallel processing
+        # For tracking, use larger chunks to minimize boundary tracking issues
+        chunk_size = 100  # Process 100 frames per chunk to balance tracking and parallelism
+        if enable_tracking:
+            # Use larger chunks when tracking is enabled (fewer chunks = fewer boundary issues)
+            chunk_size = max(100, len(frames) // self.max_workers)
+            logger.info(f"Using larger chunks ({chunk_size} frames) for parallel processing with tracking")
+        
+        num_chunks = max(1, len(frames) // chunk_size)
+        # Limit to max workers
+        num_chunks = min(self.max_workers, num_chunks)
         chunks = []
         
         for i in range(num_chunks):
             start_idx = i * chunk_size
             end_idx = min(start_idx + chunk_size, len(frames)) if i < num_chunks - 1 else len(frames)
             chunks.append((start_idx, end_idx))
-        
-        logger.info(f"Splitting {len(frames)} frames into {num_chunks} chunks")
+            
+        logger.info(f"Split {len(frames)} frames into {len(chunks)} sequential chunks for parallel processing")
         
         # Process chunks in parallel
         all_detected_faces = []
@@ -288,67 +293,109 @@ class ParallelFaceProcessor:
             chunk_frames = frames[start_idx:end_idx]
             chunk_faces = []
             
-            # Use the FaceProcessor to detect faces in these frames
-            for i, frame_data in enumerate(chunk_frames):
-                frame_path = frame_data.get('frame_path')
-                if not frame_path or not os.path.exists(frame_path):
-                    continue
+            # For tracking, we need to use the face_detector with tracking enabled
+            if enable_tracking:
+                # Import here to avoid circular imports
+                from db.face_detection import face_detector
                 
-                try:
-                    # Read the frame
-                    import cv2
-                    frame = cv2.imread(frame_path)
-                    if frame is None:
-                        continue
-                    
-                    # Detect faces using available method
-                    if self.face_processor.model is not None:
-                        # Use YOLO model
-                        faces = self.face_processor._detect_faces_yolo(frame, frame_data)
-                    elif self.face_processor.face_cascade is not None:
-                        # Fallback to OpenCV
-                        faces = self.face_processor._detect_faces_opencv(frame, frame_data)
-                    else:
-                        faces = []
-                    
-                    # Save each detected face
-                    for face_data in faces:
-                        try:
-                            # Extract face from frame using bounding box
-                            if 'box' in face_data:
-                                x1, y1, x2, y2 = map(int, face_data['box'])
-                                face = frame[y1:y2, x1:x2]
-                                
-                                # Skip if face is too small
-                                if face.size == 0 or face.shape[0] < 64 or face.shape[1] < 64:
-                                    continue
-                                
-                                # Save face
-                                face_record = self.face_processor._save_face(
-                                    face,
-                                    frame_data.get('timestamp_ms', 0),
-                                    frame_data.get('frame_number', 0),
-                                    face_data.get('confidence', 0.5)
-                                )
-                                
-                                if face_record:
-                                    chunk_faces.append(face_record)
-                        except Exception as e:
-                            logger.error(f"Error processing face in chunk {chunk_idx}: {e}")
-                except Exception as e:
-                    logger.error(f"Error processing frame in chunk {chunk_idx}: {e}")
+                # Prepare data for this chunk
+                chunk_data = {
+                    'frames': chunk_frames,
+                    'video_id': video_id,
+                    'frame_directory': frame_directory,
+                    'enable_tracking': True,
+                    'fps': fps
+                }
                 
-                # Update progress periodically
-                if i % 10 == 0:
+                # Define a local progress callback for this chunk
+                def chunk_progress_callback(percent, message):
+                    nonlocal current_progress
                     with progress_lock:
-                        chunk_progress = i / len(chunk_frames)
-                        chunk_contribution = chunk_progress * 80 / num_chunks
+                        # Scale the progress to this chunk's portion of the overall progress
+                        chunk_contribution = percent * 80 / (100 * num_chunks)
                         new_progress = min(90, 10 + (chunk_idx / num_chunks) * 80 + chunk_contribution)
                         
                         if new_progress > current_progress:
                             current_progress = new_progress
                             progress_callback(current_progress, 
-                                            f"Detecting faces in chunk {chunk_idx+1}/{num_chunks}")
+                                            f"Chunk {chunk_idx+1}/{num_chunks}: {message}")
+                
+                # Process this chunk with tracking
+                try:
+                    chunk_result = face_detector.process_video(chunk_data, chunk_progress_callback)
+                    chunk_faces = chunk_result.get('faces', [])
+                    
+                    # Add chunk index to each face for debugging
+                    for face in chunk_faces:
+                        face['chunk_idx'] = chunk_idx
+                        
+                    logger.info(f"Chunk {chunk_idx}: Processed {len(chunk_frames)} frames, found {len(chunk_faces)} faces")
+                except Exception as e:
+                    logger.error(f"Error processing chunk {chunk_idx} with tracking: {e}")
+            else:
+                # Without tracking, use the FaceProcessor directly for each frame
+                for i, frame_data in enumerate(chunk_frames):
+                    frame_path = frame_data.get('frame_path')
+                    if not frame_path or not os.path.exists(frame_path):
+                        continue
+                    
+                    try:
+                        # Read the frame
+                        import cv2
+                        frame = cv2.imread(frame_path)
+                        if frame is None:
+                            continue
+                        
+                        # Detect faces using available method
+                        if self.face_processor.model is not None:
+                            # Use YOLO model
+                            faces = self.face_processor._detect_faces_yolo(frame, frame_data)
+                        elif self.face_processor.face_cascade is not None:
+                            # Fallback to OpenCV
+                            faces = self.face_processor._detect_faces_opencv(frame, frame_data)
+                        else:
+                            faces = []
+                        
+                        # Save each detected face
+                        for face_data in faces:
+                            try:
+                                # Extract face from frame using bounding box
+                                if 'box' in face_data:
+                                    x1, y1, x2, y2 = map(int, face_data['box'])
+                                    face = frame[y1:y2, x1:x2]
+                                    
+                                    # Skip if face is too small
+                                    if face.size == 0 or face.shape[0] < 64 or face.shape[1] < 64:
+                                        continue
+                                    
+                                    # Save face
+                                    face_record = self.face_processor._save_face(
+                                        face,
+                                        frame_data.get('timestamp_ms', 0),
+                                        frame_data.get('frame_number', 0),
+                                        face_data.get('confidence', 0.5)
+                                    )
+                                    
+                                    if face_record:
+                                        # Add chunk index for debugging
+                                        face_record['chunk_idx'] = chunk_idx
+                                        chunk_faces.append(face_record)
+                            except Exception as e:
+                                logger.error(f"Error processing face in chunk {chunk_idx}: {e}")
+                    except Exception as e:
+                        logger.error(f"Error processing frame in chunk {chunk_idx}: {e}")
+                    
+                    # Update progress periodically
+                    if i % 10 == 0:
+                        with progress_lock:
+                            chunk_progress = i / len(chunk_frames)
+                            chunk_contribution = chunk_progress * 80 / num_chunks
+                            new_progress = min(90, 10 + (chunk_idx / num_chunks) * 80 + chunk_contribution)
+                            
+                            if new_progress > current_progress:
+                                current_progress = new_progress
+                                progress_callback(current_progress, 
+                                                f"Detecting faces in chunk {chunk_idx+1}/{num_chunks}")
             
             return chunk_faces
         

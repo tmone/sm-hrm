@@ -16,7 +16,10 @@ import {
   List, 
   Users, 
   Search,
-  Trash2
+  Trash2,
+  AlertTriangle,
+  X,
+  Info
 } from 'lucide-react';
 import { DetectedFace } from '../../types';
 import { 
@@ -27,7 +30,8 @@ import {
   deleteIdentityGroup,
   removeFaceFromGroup,
   mergeIdentityGroups,
-  deleteMultipleFaces
+  deleteMultipleFaces,
+  fetchFaceFiles
 } from '../../api';
 
 // Import our extracted components
@@ -169,10 +173,174 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
   const [currentPage, setCurrentPage] = useState(1);
   const [facesPerPage, setFacesPerPage] = useState(100);
   
-  // Load faces when component mounts
+  // Face file management
+  const [faceFiles, setFaceFiles] = useState<Record<string, boolean>>({});
+  const [missingFaces, setMissingFaces] = useState<string[]>([]);
+  const [isLoadingFaceFiles, setIsLoadingFaceFiles] = useState(false);
+  const [showMissingFacesInfo, setShowMissingFacesInfo] = useState(false);
+  const [autoDeleteMissingFaces, setAutoDeleteMissingFaces] = useState(false);
+  
+  // Load faces and face files when component mounts
   useEffect(() => {
     loadFaces();
-  }, [videoId]);
+    loadFaceFiles(autoDeleteMissingFaces);
+  }, [videoId, autoDeleteMissingFaces]);
+  
+  // Check for missing face files
+  const checkMissingFaces = (facesToCheck: DetectedFace[], fileMap: Record<string, boolean>) => {
+    const missing: string[] = [];
+    
+    facesToCheck.forEach(face => {
+      if (!fileMap[face.id]) {
+        missing.push(face.id);
+      }
+    });
+    
+    setMissingFaces(missing);
+    
+    if (missing.length > 0) {
+      setShowMissingFacesInfo(true);
+      console.warn(`Found ${missing.length} faces with missing files`);
+    } else {
+      setShowMissingFacesInfo(false);
+    }
+    
+    return missing;
+  };
+  
+  // Load available face files from the server
+  const loadFaceFiles = async (autoDeleteMissing: boolean = false) => {
+    try {
+      setIsLoadingFaceFiles(true);
+      const result = await fetchFaceFiles();
+      
+      // Convert the array to a map for quick lookup
+      const fileMap: Record<string, boolean> = {};
+      result.faces.forEach(face => {
+        // Strip the extension to get just the ID
+        const id = face.id;
+        fileMap[id] = true;
+      });
+      
+      setFaceFiles(fileMap);
+      
+      // Log success
+      console.log(`Loaded ${result.count} face files from server`);
+      
+      // If we already have faces loaded, check for missing files
+      if (faces.length > 0) {
+        const missingFaceIds = checkMissingFaces(faces, fileMap);
+        
+        // Automatically delete missing faces if requested
+        if (autoDeleteMissing && missingFaceIds.length > 0) {
+          // Show toast notification
+          toast({
+            title: 'Auto-removing missing faces',
+            description: `Removing ${missingFaceIds.length} face${missingFaceIds.length !== 1 ? 's' : ''} with missing files...`,
+            variant: 'default'
+          });
+          
+          try {
+            // Call the API to delete the faces
+            await deleteMultipleFaces(videoId, missingFaceIds);
+            
+            // Update local state to remove the deleted faces
+            setFaces(prevFaces => prevFaces.filter(face => !missingFaceIds.includes(face.id)));
+            
+            // Clear missing faces list
+            setMissingFaces([]);
+            setShowMissingFacesInfo(false);
+            
+            // Show success message
+            toast({
+              title: 'Missing faces deleted',
+              description: `Successfully deleted ${missingFaceIds.length} face${missingFaceIds.length !== 1 ? 's' : ''} with missing files.`,
+              variant: 'default'
+            });
+            
+            // Refresh to get the updated data from the server after a delay
+            setTimeout(() => {
+              loadFaces(false); // Don't auto-delete on the refresh
+            }, 500);
+          } catch (autoDeleteError) {
+            console.error('Error auto-deleting missing faces:', autoDeleteError);
+            toast({
+              title: 'Failed to auto-delete missing faces',
+              description: `Error: ${autoDeleteError instanceof Error ? autoDeleteError.message : "Server communication error"}`,
+              variant: 'destructive'
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error loading face files:', error);
+      toast({
+        title: 'Failed to load face files',
+        description: 'Could not load face files from server. Some face images may not display correctly.',
+        variant: 'destructive'
+      });
+    } finally {
+      setIsLoadingFaceFiles(false);
+    }
+  };
+  
+  // Handle face image load error
+  const handleFaceImageError = (faceId: string) => {
+    if (!missingFaces.includes(faceId)) {
+      setMissingFaces(prev => [...prev, faceId]);
+      setShowMissingFacesInfo(true);
+    }
+  };
+  
+  // Handle deletion of faces with missing files
+  const handleDeleteMissingFaces = async () => {
+    if (missingFaces.length === 0) {
+      toast({
+        title: "No faces to delete",
+        description: "There are no faces with missing files to delete.",
+        variant: "default"
+      });
+      return;
+    }
+    
+    // Show confirmation toast with loading state
+    toast({
+      title: "Deleting missing faces",
+      description: `Removing ${missingFaces.length} face${missingFaces.length !== 1 ? 's' : ''} with missing files...`,
+      variant: "default"
+    });
+    
+    try {
+      // Call the API to delete the faces
+      const result = await deleteMultipleFaces(videoId, missingFaces);
+      
+      // Update local state to remove the deleted faces
+      setFaces(prevFaces => prevFaces.filter(face => !missingFaces.includes(face.id)));
+      
+      // Clear missing faces list
+      setMissingFaces([]);
+      setShowMissingFacesInfo(false);
+      
+      // Show success message
+      toast({
+        title: "Missing faces deleted",
+        description: `Successfully deleted ${result.successful} face${result.successful !== 1 ? 's' : ''} with missing files. ${result.failed > 0 ? `${result.failed} failed.` : ''}`,
+        variant: "default"
+      });
+      
+      // Refresh to get the updated data from the server after a delay
+      setTimeout(() => {
+        loadFaces();
+      }, 500);
+    } catch (error) {
+      console.error('Error deleting missing faces:', error);
+      toast({
+        title: "Failed to delete missing faces",
+        description: `Error: ${error instanceof Error ? error.message : "Server communication error"}. Please try again.`,
+        variant: "destructive"
+      });
+    }
+  };
   
   const loadFaces = async () => {
     try {
@@ -228,6 +396,11 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
       }
       
       setFaces(videoFaces);
+      
+      // Check for missing face files if they're already loaded
+      if (Object.keys(faceFiles).length > 0) {
+        checkMissingFaces(videoFaces, faceFiles);
+      }
     } catch (error) {
       console.error('Error loading faces:', error);
       toast({
@@ -999,6 +1172,72 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
         </div>
       </div>
       
+      {/* Missing Faces Alert */}
+      {showMissingFacesInfo && missingFaces.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-md p-4 mb-4 relative">
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            className="absolute top-2 right-2 h-6 w-6 text-amber-500 hover:text-amber-700"
+            onClick={() => setShowMissingFacesInfo(false)}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+          <div className="flex items-start">
+            <AlertTriangle className="h-5 w-5 text-amber-500 mr-3 mt-0.5" />
+            <div>
+              <h3 className="font-medium text-amber-800">Face Files Missing</h3>
+              <p className="text-sm text-amber-700 mt-1">
+                {missingFaces.length} {missingFaces.length === 1 ? 'face' : 'faces'} have missing image files. 
+                This may cause display issues. Consider re-processing the video.
+              </p>
+              <div className="flex flex-col gap-2 mt-2">
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="bg-amber-100 border-amber-300 text-amber-800 hover:bg-amber-200"
+                    onClick={() => {
+                      // Refresh face files
+                      loadFaceFiles(autoDeleteMissingFaces);
+                    }}
+                  >
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Refresh Face Files
+                  </Button>
+                  
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="bg-red-100 border-red-300 text-red-800 hover:bg-red-200"
+                    onClick={() => {
+                      // Clean up faces with missing files
+                      handleDeleteMissingFaces();
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete Missing Faces
+                  </Button>
+                </div>
+                
+                <div className="flex items-center gap-2 mt-1">
+                  <Checkbox 
+                    id="auto-delete" 
+                    checked={autoDeleteMissingFaces}
+                    onCheckedChange={(checked) => {
+                      setAutoDeleteMissingFaces(!!checked);
+                    }}
+                  />
+                  <Label htmlFor="auto-delete" className="text-amber-800 text-sm cursor-pointer">
+                    Auto-delete missing faces on load
+                  </Label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
       <div className="flex flex-col gap-4">
         <Card>
           <CardHeader className="pb-3 sticky top-0 z-20 bg-background border-b shadow-sm">
@@ -1137,6 +1376,8 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                       onDelete={promptDeleteFace}
                       recentlyRemovedFaceId={recentlyRemovedFaceId}
                       formatTimestamp={formatTimestamp}
+                      missingFile={missingFaces.includes(face.id)}
+                      onImageLoadError={handleFaceImageError}
                     />
                   );
                 })}
@@ -1181,11 +1422,22 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                             </TableCell>
                             <TableCell>
                               <div className="h-12 w-12 relative rounded overflow-hidden">
-                                <Image
+                                <img
                                   src={group.representativeFace.imageUrl}
                                   alt="Group Representative"
-                                  fill
-                                  className="object-cover"
+                                  className="absolute inset-0 w-full h-full object-cover"
+                                  onError={(e) => {
+                                    // Handle image error
+                                    if (onImageLoadError) {
+                                      // Get the face ID from the URL
+                                      const urlParts = group.representativeFace.imageUrl.split('/');
+                                      const fileNameWithExt = urlParts[urlParts.length - 1];
+                                      const faceId = fileNameWithExt.split('.')[0];
+                                      onImageLoadError(faceId);
+                                    }
+                                    // Hide the broken image
+                                    e.currentTarget.style.display = 'none';
+                                  }}
                                 />
                                 <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
                                   <Badge variant="secondary" className="bg-primary text-white">
@@ -1216,12 +1468,15 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                       
                       // Regular face row
                       const face = item as DetectedFace;
+                      const isMissingFile = missingFaces.includes(face.id);
+                      
                       return (
                         <TableRow 
                           key={face.id}
                           className={`
                             ${selectedFaces[face.id] ? 'bg-primary/5' : ''}
                             ${recentlyRemovedFaceId === face.id ? 'bg-blue-50 animate-pulse' : ''}
+                            ${isMissingFile ? 'bg-red-50' : ''}
                           `}
                         >
                           <TableCell>
@@ -1242,12 +1497,44 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                           </TableCell>
                           <TableCell>
                             <div className="h-12 w-12 relative rounded overflow-hidden">
-                              <Image
-                                src={face.imageUrl}
+                              <img
+                                src={`/static/faces/${face.id}.jpg`}
                                 alt="Face"
-                                fill
-                                className="object-cover"
+                                className="absolute inset-0 w-full h-full object-cover"
+                                onError={(e) => {
+                                  // Try fallbacks
+                                  const fallbacks = [
+                                    face.imageUrl,
+                                    `/static/faces/${face.id}.png`,
+                                    face.imageUrl?.split('?')[0],
+                                    face.image_url
+                                  ].filter(Boolean);
+                                  
+                                  // Try each fallback
+                                  const tryNextFallback = (index = 0) => {
+                                    if (index >= fallbacks.length) {
+                                      // Call error handler
+                                      handleFaceImageError(face.id);
+                                      // Hide the image
+                                      e.currentTarget.style.display = 'none';
+                                      return;
+                                    }
+                                    
+                                    const nextSrc = fallbacks[index];
+                                    e.currentTarget.src = nextSrc;
+                                    e.currentTarget.onerror = () => {
+                                      tryNextFallback(index + 1);
+                                    };
+                                  };
+                                  
+                                  tryNextFallback();
+                                }}
                               />
+                              {isMissingFile && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-red-500/50">
+                                  <Info className="h-5 w-5 text-white" />
+                                </div>
+                              )}
                             </div>
                           </TableCell>
                           <TableCell className="font-mono text-xs">{face.id.substring(0, 8)}...</TableCell>
@@ -1276,6 +1563,11 @@ export default function VideoLabeling({ videoId }: VideoLabelingProps) {
                               </Badge>
                             ) : (
                               <Badge variant="outline">Unlabeled</Badge>
+                            )}
+                            {isMissingFile && (
+                              <Badge variant="outline" className="ml-2 bg-red-50 text-red-600 border-red-200">
+                                Missing File
+                              </Badge>
                             )}
                           </TableCell>
                         </TableRow>

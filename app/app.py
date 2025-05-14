@@ -587,6 +587,7 @@ class VideoProcessingResponse(BaseModel):
     progress: float
     error: Optional[str] = None
     face_count: Optional[int] = None
+    recovered: Optional[bool] = None
 
 # Video upload and processing endpoints
 @app.post("/api/videos/upload", response_model=VideoUploadResponse)
@@ -666,6 +667,40 @@ async def process_video_background(
         "progress": 0
     }
 
+@app.post("/api/videos/{video_id}/recover", response_model=VideoProcessingResponse)
+async def recover_video_processing(
+    video_id: str,
+    current_user: dict = Depends(auth.get_current_user_optional)
+):
+    """Attempt to recover a failed video processing job"""
+
+    # Get the video record
+    video = upload_manager.get_video(video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail=f"Video {video_id} not found")
+
+    # Try to recover the processing
+    try:
+        task_id = f"task_{video_id}"
+        success = background_processor.recover_video_processing(video_id, task_id)
+        
+        if not success:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to recover video {video_id}. No faces could be salvaged."
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Return the task ID with recovery status
+    return {
+        "task_id": task_id,
+        "video_id": video_id,
+        "status": "completed",
+        "progress": 100,
+        "recovered": True
+    }
+
 @app.get("/api/tasks/{task_id}", response_model=VideoProcessingResponse)
 async def get_task_status(task_id: str,
                         current_user: dict = Depends(auth.get_current_user_optional)):
@@ -675,9 +710,29 @@ async def get_task_status(task_id: str,
     task_status = background_processor.get_task_status(task_id)
     if not task_status:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-
-    # Return the task status
-    return task_status
+    
+    # Ensure all required fields are present
+    if "video_id" not in task_status:
+        # Try to extract video_id from task_id (often follows format "task_<video_id>")
+        if task_id.startswith("task_"):
+            task_status["video_id"] = task_id[5:]  # Remove "task_" prefix
+        else:
+            task_status["video_id"] = ""
+    
+    if "progress" not in task_status:
+        task_status["progress"] = 0.0
+    
+    # Make sure all fields from VideoProcessingResponse are present
+    # Optional fields get default values if not specified
+    return {
+        "task_id": task_status.get("task_id", task_id),
+        "video_id": task_status.get("video_id", ""),
+        "status": task_status.get("status", "unknown"),
+        "progress": task_status.get("progress", 0.0),
+        "error": task_status.get("error"),
+        "face_count": task_status.get("face_count"),
+        "recovered": task_status.get("recovered")
+    }
 
 @app.get("/api/videos")
 async def list_videos(status: Optional[str] = None,
@@ -690,12 +745,115 @@ async def list_videos(status: Optional[str] = None,
         status: Filter by processing status
         include_deleted: If True, include videos marked as deleted
     """
-
-    # Get all videos
-    videos = upload_manager.get_all_videos(status, include_deleted)
-
-    # Return the list
-    return {"videos": videos}
+    try:
+        # Log for debugging
+        logger.info(f"Fetching videos with status={status}, include_deleted={include_deleted}")
+        
+        # Get all videos with enhanced error handling
+        videos = upload_manager.get_all_videos(status, include_deleted)
+        
+        # Log result
+        logger.info(f"Found {len(videos)} videos")
+        
+        # Additional verification for videos and their faces
+        validated_videos = []
+        
+        for video in videos:
+            if not isinstance(video, dict):
+                logger.warning(f"Skipping invalid video record (not a dict): {type(video)}")
+                continue
+                
+            # Ensure required fields exist with defaults
+            video_id = video.get("id", str(uuid.uuid4()))
+            video.setdefault("id", video_id)
+            video.setdefault("processing_status", "unknown")
+            video.setdefault("original_filename", "unknown.mp4")
+            video.setdefault("uploaded_at", datetime.now().isoformat())
+            video.setdefault("is_deleted", False)
+            
+            # Validate faces
+            if "faces" not in video or not isinstance(video["faces"], list):
+                logger.warning(f"Video {video_id} missing or invalid 'faces' field, setting to empty array")
+                video["faces"] = []
+            
+            # Ensure each face has the required properties
+            if video["faces"]:
+                validated_faces = []
+                for face in video["faces"]:
+                    if not isinstance(face, dict):
+                        logger.warning(f"Skipping invalid face in video {video_id} (not a dict)")
+                        continue
+                        
+                    # Ensure face has an ID
+                    if "id" not in face:
+                        face["id"] = str(uuid.uuid4())
+                        logger.warning(f"Added missing id to face in video {video_id}")
+                    
+                    # Ensure face has an imageUrl (critical for frontend)
+                    if "imageUrl" not in face:
+                        if "face_path" in face:
+                            # Derive imageUrl from face_path
+                            face_filename = os.path.basename(face["face_path"])
+                            face["imageUrl"] = f"/static/faces/{face_filename}"
+                            logger.info(f"Added derived imageUrl for face {face['id']} in video {video_id}")
+                        else:
+                            # Use placeholder if no path available
+                            face["imageUrl"] = "/static/placeholder-face.jpg"
+                            logger.warning(f"Added placeholder imageUrl for face {face['id']} in video {video_id}")
+                    
+                    validated_faces.append(face)
+                
+                video["faces"] = validated_faces
+            
+            validated_videos.append(video)
+        
+        # Return the validated list
+        return {"videos": validated_videos}
+    except Exception as e:
+        # Log the error with full traceback for diagnosis
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Error listing videos: {str(e)}\n{error_details}")
+        
+        # Try to return a partial result with more error details
+        try:
+            # Make a second attempt with more defensive approach
+            logger.info("Attempting to retrieve videos with fallback method")
+            
+            # Get a fresh instance of upload_manager if needed
+            try:
+                from db.uploads import UploadManager
+                fallback_manager = UploadManager()
+                partial_videos = fallback_manager.get_all_videos(status, include_deleted) or []
+                logger.info(f"Fallback retrieved {len(partial_videos)} videos")
+            except Exception as fallback_error:
+                logger.error(f"Fallback retrieval failed: {str(fallback_error)}")
+                partial_videos = []
+            
+            # Return partial results with detailed error information
+            return {
+                "videos": partial_videos,
+                "partial_results": True,
+                "error": {
+                    "message": str(e),
+                    "type": e.__class__.__name__,
+                    "code": "VIDEO_LIST_ERROR"
+                }
+            }
+        except Exception as fallback_e:
+            # If even the fallback fails, provide detailed error
+            logger.critical(f"Complete failure in video listing API: {str(fallback_e)}")
+            
+            # Raise HTTP exception with more details
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "message": f"Error listing videos: {str(e)}",
+                    "type": e.__class__.__name__,
+                    "fallback_error": str(fallback_e),
+                    "code": "VIDEO_LIST_CRITICAL_ERROR"
+                }
+            )
 
 @app.get("/api/videos/{video_id}")
 async def get_video(video_id: str,
@@ -1413,6 +1571,39 @@ async def get_face_sessions(
     groups = identity_group_manager.get_all_identities()
     return {"groups": groups}
 
+
+@app.get("/api/face-files")
+async def get_face_files():
+    """Return a list of all available face image files"""
+    face_files = []
+    
+    faces_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "faces")
+    
+    if os.path.exists(faces_dir):
+        for file in os.listdir(faces_dir):
+            if file.endswith(('.jpg', '.jpeg', '.png')):
+                # Extract the face ID from the filename
+                face_id = os.path.splitext(file)[0]
+                file_path = os.path.join(faces_dir, file)
+                
+                # Get file size and modification time
+                stat = os.stat(file_path)
+                
+                face_files.append({
+                    'id': face_id,
+                    'filename': file,
+                    'url': f"/static/faces/{file}",
+                    'size': stat.st_size,
+                    'modified': stat.st_mtime
+                })
+    
+    # Sort by modification time (newest first)
+    face_files.sort(key=lambda x: x['modified'], reverse=True)
+    
+    return {
+        'count': len(face_files),
+        'faces': face_files
+    }
 @app.get("/api/identity-groups/{identity_id}")
 async def get_identity_group(
     identity_id: str,

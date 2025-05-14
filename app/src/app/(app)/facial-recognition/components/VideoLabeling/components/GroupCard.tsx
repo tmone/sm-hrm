@@ -66,13 +66,54 @@ const GroupCard: React.FC<GroupCardProps> = ({
         className="aspect-square relative cursor-pointer"
         onClick={() => onSelect(identityCode)}
       >
-        {/* Show the representative face of the group */}
-        <Image
-          src={representativeFace.imageUrl}
-          alt="Group Representative"
-          fill
-          className="object-cover"
-        />
+        {/* Direct img tag instead of Next.js Image component for better reliability */}
+        <div className="relative w-full h-full">
+          <img
+            src={representativeFace.imageUrl}
+            alt="Group Representative"
+            className="absolute inset-0 w-full h-full object-cover"
+            onError={(e) => {
+              console.warn(`Image not found: ${representativeFace.imageUrl}`);
+              
+              // Extract face ID from the URL if possible
+              const faceIdMatch = representativeFace.imageUrl.match(/face_id=([^&]+)/);
+              const faceId = faceIdMatch ? faceIdMatch[1] : null;
+              
+              // Try fallback paths
+              const fallbacks = [
+                // Try with direct face ID path first if we have it
+                faceId ? `/static/faces/${faceId}.jpg` : null,
+                // Try with direct URL - no image optimization
+                representativeFace.imageUrl.replace('/api/python-bridge?endpoint=face_image', '/static/faces'),
+                // Try with .png extension if we have face ID
+                faceId ? `/static/faces/${faceId}.png` : null,
+                // Try without optimization parameters if they exist
+                representativeFace.imageUrl?.split('?')[0]
+              ].filter(Boolean); // Remove undefined entries
+              
+              // Use a recursive function to try all fallback paths
+              const tryNextFallback = (index = 0) => {
+                if (index >= fallbacks.length) {
+                  // All fallbacks failed, show a generic face placeholder
+                  console.error(`All image fallbacks failed for group representative`);
+                  return;
+                }
+                
+                const nextSrc = fallbacks[index];
+                // @ts-ignore - Update the src attribute
+                e.currentTarget.src = nextSrc;
+                
+                // Add onError handler to try the next fallback
+                // @ts-ignore
+                e.currentTarget.onerror = () => {
+                  tryNextFallback(index + 1);
+                };
+              };
+              
+              tryNextFallback();
+            }}
+          />
+        </div>
         
         {/* Group badge */}
         <div className="absolute inset-0 bg-black/30 flex flex-col items-center justify-center">

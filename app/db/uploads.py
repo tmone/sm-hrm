@@ -33,11 +33,24 @@ class UploadManager:
         # File for tracking uploads
         self.uploads_file = os.path.join(self.uploads_dir, "uploads.json")
         
+        print(f"Uploads file path: {self.uploads_file}")
+        
         # Initialize or load uploads tracking
         if os.path.exists(self.uploads_file):
-            with open(self.uploads_file, 'r') as f:
-                self.uploads = json.load(f)
+            try:
+                with open(self.uploads_file, 'r') as f:
+                    self.uploads = json.load(f)
+                print(f"Loaded {len(self.uploads.get('videos', []))} videos from uploads file")
+            except Exception as e:
+                print(f"Error loading uploads file: {str(e)}")
+                # Create default structure if loading fails
+                self.uploads = {
+                    "videos": [],
+                    "last_updated": datetime.now().isoformat()
+                }
+                print("Created empty uploads dictionary after error")
         else:
+            print("No uploads file found, creating new one")
             self.uploads = {
                 "videos": [],
                 "last_updated": datetime.now().isoformat()
@@ -145,17 +158,144 @@ class UploadManager:
         Returns:
             List of video records
         """
-        videos = self.uploads["videos"]
+        try:
+            # Make sure uploads is initialized
+            if not hasattr(self, 'uploads') or not self.uploads:
+                print("Warning: uploads not initialized, trying to reload")
+                # Try to load uploads file
+                if os.path.exists(self.uploads_file):
+                    try:
+                        with open(self.uploads_file, 'r') as f:
+                            self.uploads = json.load(f)
+                        print(f"Reloaded {len(self.uploads.get('videos', []))} videos from uploads file")
+                    except json.JSONDecodeError as je:
+                        print(f"JSON decode error in uploads file: {str(je)}")
+                        # Try to recover corrupted JSON
+                        recovered = self._recover_corrupted_json()
+                        if recovered:
+                            print(f"Successfully recovered {len(self.uploads.get('videos', []))} videos from corrupted file")
+                        else:
+                            # Create default structure if recovery fails
+                            self.uploads = {
+                                "videos": [],
+                                "last_updated": datetime.now().isoformat()
+                            }
+                            print("Created empty uploads dictionary after failed recovery")
+                    except Exception as e:
+                        print(f"Error reloading uploads file: {str(e)}")
+                        # Create default structure if loading fails
+                        self.uploads = {
+                            "videos": [],
+                            "last_updated": datetime.now().isoformat()
+                        }
+                        print("Created empty uploads dictionary after error")
+                else:
+                    print("No uploads file found, creating new one")
+                    self.uploads = {
+                        "videos": [],
+                        "last_updated": datetime.now().isoformat()
+                    }
+                    self._save_uploads()
+                
+            # Make sure videos key exists
+            if "videos" not in self.uploads:
+                print("Warning: 'videos' key not found in uploads, initializing it")
+                self.uploads["videos"] = []
+            
+            # Ensure videos is a list (defensive programming)
+            if not isinstance(self.uploads["videos"], list):
+                print(f"Error: 'videos' is not a list type: {type(self.uploads['videos'])}")
+                self.uploads["videos"] = []
+                self._save_uploads()  # Save the corrected structure
+            
+            videos = self.uploads["videos"]
+            print(f"Found {len(videos)} videos before filtering")
 
-        # Filter by deletion status
-        if not include_deleted:
-            videos = [v for v in videos if not v.get("is_deleted", False)]
+            # Validate and sanitize each video entry
+            sanitized_videos = []
+            modified = False
+            
+            for idx, video in enumerate(videos):
+                if not isinstance(video, dict):
+                    print(f"Warning: Video at index {idx} is not a dictionary, skipping")
+                    modified = True
+                    continue
+                
+                # Ensure required keys exist with default values
+                if "id" not in video:
+                    video["id"] = str(uuid.uuid4())
+                    modified = True
+                    
+                if "processing_status" not in video:
+                    video["processing_status"] = "unknown"
+                    modified = True
+                    
+                if "is_deleted" not in video:
+                    video["is_deleted"] = False
+                    modified = True
+                    
+                if "faces" not in video:
+                    video["faces"] = []
+                    modified = True
+                elif not isinstance(video["faces"], list):
+                    video["faces"] = []
+                    modified = True
+                
+                # Sanitize faces array to ensure all faces have required properties
+                if "faces" in video and isinstance(video["faces"], list):
+                    sanitized_faces = []
+                    face_modified = False
+                    
+                    for face in video["faces"]:
+                        if isinstance(face, dict):
+                            # Ensure required face properties
+                            if "id" not in face:
+                                face["id"] = str(uuid.uuid4())
+                                face_modified = True
+                                
+                            # Add imageUrl if missing but face_path exists
+                            if "face_path" in face and not face.get("imageUrl"):
+                                face_filename = os.path.basename(face["face_path"])
+                                face["imageUrl"] = f"/static/faces/{face_filename}"
+                                face_modified = True
+                                
+                            sanitized_faces.append(face)
+                    
+                    if face_modified or len(sanitized_faces) != len(video["faces"]):
+                        video["faces"] = sanitized_faces
+                        modified = True
+                
+                sanitized_videos.append(video)
+            
+            # Save sanitized videos back to uploads if we made any changes
+            if modified or len(sanitized_videos) != len(videos):
+                self.uploads["videos"] = sanitized_videos
+                print(f"Saved sanitized video list with {len(sanitized_videos)} videos")
+                self._save_uploads()
+                videos = sanitized_videos
 
-        # Filter by processing status if provided
-        if status:
-            videos = [v for v in videos if v["processing_status"] == status]
+            # Filter by deletion status
+            if not include_deleted:
+                filtered_videos = [v for v in videos if not v.get("is_deleted", False)]
+                print(f"After deletion filtering: {len(filtered_videos)} videos")
+            else:
+                filtered_videos = videos
+                
+            # Filter by processing status if provided
+            if status:
+                final_videos = [v for v in filtered_videos if v.get("processing_status") == status]
+                print(f"After status filtering: {len(final_videos)} videos")
+            else:
+                final_videos = filtered_videos
 
-        return videos
+            return final_videos
+            
+        except Exception as e:
+            print(f"Error in get_all_videos: {str(e)}")
+            import traceback
+            print(f"Traceback: {traceback.format_exc()}")
+            # Return empty list on error
+            return []
 
     def delete_video(self, upload_id: str) -> bool:
         """
@@ -204,6 +344,81 @@ class UploadManager:
         with open(self.uploads_file, 'w') as f:
             json.dump(self.uploads, f, indent=2)
     
+    def _recover_corrupted_json(self) -> bool:
+        """
+        Attempt to recover a corrupted uploads.json file
+        
+        Returns:
+            bool: True if recovery was successful, False otherwise
+        """
+        try:
+            print(f"Attempting to recover corrupted uploads file: {self.uploads_file}")
+            
+            # Try to create a backup first
+            backup_path = f"{self.uploads_file}.bak"
+            try:
+                shutil.copy2(self.uploads_file, backup_path)
+                print(f"Created backup at {backup_path}")
+            except Exception as e:
+                print(f"Failed to create backup: {str(e)}")
+            
+            # Read the file as text and try to fix common JSON issues
+            with open(self.uploads_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Try to parse the content with a more forgiving approach
+            import re
+            
+            # Check if it's completely corrupted beyond repair
+            if not content.strip().startswith('{'):
+                print("File is too corrupted to recover using simple methods")
+                return False
+                
+            # Initialize with empty structure if recovery fails
+            self.uploads = {
+                "videos": [],
+                "last_updated": datetime.now().isoformat()
+            }
+            
+            # Try to extract the videos array if it exists
+            videos_match = re.search(r'"videos"\s*:\s*\[(.*?)\]', content, re.DOTALL)
+            if videos_match:
+                try:
+                    # Try to parse each object in the array individually
+                    videos_content = videos_match.group(1)
+                    video_objects = []
+                    
+                    # Very basic parsing to extract individual JSON objects
+                    depth = 0
+                    start = 0
+                    for i, char in enumerate(videos_content):
+                        if char == '{': 
+                            if depth == 0:
+                                start = i
+                            depth += 1
+                        elif char == '}':
+                            depth -= 1
+                            if depth == 0:
+                                try:
+                                    obj_str = videos_content[start:i+1]
+                                    video_obj = json.loads(obj_str)
+                                    video_objects.append(video_obj)
+                                except:
+                                    print(f"Failed to parse video object: {obj_str[:100]}...")
+                    
+                    if video_objects:
+                        print(f"Recovered {len(video_objects)} video objects")
+                        self.uploads["videos"] = video_objects
+                        self._save_uploads()  # Save the recovered data
+                        return True
+                except Exception as e:
+                    print(f"Error during videos extraction: {str(e)}")
+            
+            return False
+        except Exception as e:
+            print(f"Error in _recover_corrupted_json: {str(e)}")
+            return False
+
     def _get_mime_type(self, extension: str) -> str:
         """Get MIME type from file extension"""
         mime_types = {

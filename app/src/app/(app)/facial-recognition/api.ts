@@ -226,6 +226,7 @@ export async function fetchFacesForVideo(videoId: string): Promise<DetectedFace[
 
 /**
  * Fetches task status for a specific processing task
+ * Now with improved error handling and status reporting
  */
 export async function fetchTaskStatus(taskId: string): Promise<ProcessingTask | null> {
   try {
@@ -236,30 +237,65 @@ export async function fetchTaskStatus(taskId: string): Promise<ProcessingTask | 
     }
     
     // Some APIs return data.task, others return the task directly
+    let taskData: Partial<ProcessingTask>;
+    
     if (data.task) {
-      return data.task;
+      taskData = data.task;
     } else if (data.status !== undefined) {
       // The API might return the task directly
-      return data as ProcessingTask;
+      taskData = data as ProcessingTask;
     } else {
-      // Return a default task object with safe values
-      return {
-        task_id: taskId,
-        video_id: '',
-        status: 'unknown',
-        progress: 0
-      };
+      // Create a default task object
+      taskData = {};
     }
+    
+    // Ensure all required fields are present to avoid backend validation errors
+    const result: ProcessingTask = {
+      task_id: taskData.task_id || taskId,
+      video_id: taskData.video_id || '', // Empty string fallback for missing video_id
+      status: taskData.status || 'unknown',
+      progress: typeof taskData.progress === 'number' ? taskData.progress : 0, // Default to 0 if missing
+      // Optional fields
+      face_count: taskData.face_count,
+      error: taskData.error
+    };
+    
+    return result;
   } catch (error) {
     console.error(`Error fetching task status for ${taskId}:`, error);
-    // Return a default task with error status
-    return {
-      task_id: taskId,
-      video_id: '',
-      status: 'failed',
-      progress: 0,
-      error: error instanceof Error ? error.message : 'Unknown error'
+    
+    // Only mark as failed for non-network errors
+    // For network errors, return "processing" to keep the UI in a processing state
+    // so that the polling mechanism continues to try again
+    // Create a consistent response object with all required fields
+    const createTaskResponse = (status: string, progress: number, errorMsg?: string): ProcessingTask => {
+      return {
+        task_id: taskId,
+        video_id: '',  // Empty string is valid for FastAPI validation
+        status: status,
+        progress: progress,
+        error: errorMsg,
+        // Don't include optional fields that aren't provided
+      };
     };
+    
+    if (error instanceof NetworkError) {
+      console.warn(`Network error while fetching task status for ${taskId} - will retry.`);
+      return createTaskResponse('processing', -1, 'Network error - retrying');
+    }
+    
+    // For API errors that might be temporary, also keep the task in processing state
+    if (error instanceof APIError && [500, 502, 503, 504].includes(error.statusCode)) {
+      console.warn(`Server error (${error.statusCode}) while fetching task status for ${taskId} - will retry.`);
+      return createTaskResponse('processing', -1, `Server error (${error.statusCode}) - retrying`);
+    }
+    
+    // For other errors, return failed status
+    return createTaskResponse(
+      'failed', 
+      0, 
+      error instanceof Error ? error.message : 'Unknown error'
+    );
   }
 }
 
@@ -593,5 +629,49 @@ export async function mergeIdentityGroups(identityIds: string[]): Promise<any> {
   } catch (error) {
     console.error(`Error merging identity groups:`, error);
     throw error;
+  }
+}
+
+/**
+ * Fetches all available face files from the server
+ * Returns a list of face files with their IDs, URLs, and metadata
+ */
+export async function fetchFaceFiles(): Promise<{
+  count: number;
+  faces: {
+    id: string;
+    filename: string;
+    url: string;
+    size: number;
+    modified: number;
+  }[];
+}> {
+  try {
+    const data = await fetchFromAPI('api/face-files');
+    
+    // Handle endpoint not found gracefully
+    if (data?.status === "not_found") {
+      console.warn('Face files endpoint not available');
+      return {
+        count: 0,
+        faces: []
+      };
+    }
+    
+    // Validate response structure
+    if (!data || typeof data !== 'object') {
+      throw new ValidationError('Invalid response format from face files API');
+    }
+    
+    return {
+      count: data.count || 0,
+      faces: Array.isArray(data.faces) ? data.faces : []
+    };
+  } catch (error) {
+    console.error('Error fetching face files:', error);
+    return {
+      count: 0,
+      faces: []
+    };
   }
 }
