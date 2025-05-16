@@ -1,0 +1,12 @@
+{
+  "job_id": "test-manual",
+  "groups": [
+    "PERSON-0017",
+    "PERSON-0020"
+  ],
+  "train_images": 12,
+  "val_images": 4,
+  "classes": 2,
+  "dataset_path": "./datasets/dataset_test-manual",
+  "yaml_path": "./datasets/dataset_test-manual/dataset.yaml"
+}

@@ -4,8 +4,9 @@ import json
 import tempfile
 import shutil
 import io
+import uuid
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, Depends, HTTPException, status, Request, UploadFile, File, Form, BackgroundTasks, Body
+from fastapi import FastAPI, Depends, HTTPException, status, Request, UploadFile, File, Form, BackgroundTasks, Body, WebSocket
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,6 +46,7 @@ from db.identity_groups import identity_group_manager
 from db.users import UserManager
 from db.roles import RoleManager
 from db.user_settings import UserSettingsManager
+from db.external_yolo_trainer import external_yolo_trainer as training_manager
 
 # Initialize the database
 init_db()
@@ -120,6 +122,9 @@ class UserSettingsModel(BaseModel):
     class Config:
         from_attributes = True
 
+class TrainingStartRequest(BaseModel):
+    identity_group_ids: List[str]
+
 class Employee(BaseModel):
     id: Optional[int] = None
     employee_id: str
@@ -146,11 +151,12 @@ app.state.MAX_FILE_SIZE = 2048 * 1024 * 1024  # 2048MB (2GB) in bytes
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:9002", "http://127.0.0.1:9002", "*"],  # Add explicit origins + wildcard
+    allow_origins=["http://localhost:9002", "http://127.0.0.1:9002", "http://localhost:9200", "*"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "Accept"],
-    expose_headers=["Content-Type", "Authorization"]
+    allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,
 )
 
 # Authentication endpoints
@@ -618,8 +624,14 @@ async def upload_video(
     
     # Save the video using the upload manager
     try:
+        logger.info(f"[DEBUG] Starting video upload - filename: {video_file.filename}")
+        logger.info(f"[DEBUG] Video file type: {type(video_file.file)}")
+        
         # Use a more efficient approach for streaming the upload
         video_record = upload_manager.save_video(video_file.file, video_file.filename, metadata)
+        
+        logger.info(f"[DEBUG] Video saved with ID: {video_record['id']}")
+        logger.info(f"[DEBUG] Video path: {video_record.get('file_path')}")
         
         return {
             "upload_id": video_record["id"],
@@ -629,7 +641,10 @@ async def upload_video(
             "uploaded_at": video_record["uploaded_at"]
         }
     except Exception as e:
-        print(f"Error uploading video: {str(e)}")
+        logger.error(f"[DEBUG] Error uploading video: {str(e)}")
+        import traceback
+        logger.error(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        
         # Check if it's a file size error coming from the client
         if "File size exceeds" in str(e):
             raise HTTPException(
@@ -1554,14 +1569,43 @@ async def get_user_roles(user_id: int, current_user: dict = Depends(auth.get_cur
     roles = user_manager.get_user_roles(user_id)
     return roles
 
+# Debug endpoint
+@app.get("/api/debug/identity-test")
+async def debug_identity_test():
+    """Debug endpoint to test identity groups"""
+    try:
+        result = {
+            "status": "ok",
+            "identity_manager_exists": identity_group_manager is not None,
+            "identities_file": identity_group_manager.identities_file if identity_group_manager else None,
+            "identities_loaded": bool(identity_group_manager.identities) if identity_group_manager else False,
+        }
+
+        if identity_group_manager and identity_group_manager.identities:
+            result["groups_count"] = len(identity_group_manager.identities.get("groups", {}))
+            result["groups_keys"] = list(identity_group_manager.identities.get("groups", {}).keys())[:5]  # First 5 keys
+
+        return result
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 # Identity group API endpoints
 @app.get("/api/identity-groups")
 async def get_identity_groups(
     current_user: dict = Depends(auth.get_current_user_optional)
 ):
     """Get all identity groups"""
-    groups = identity_group_manager.get_all_identities()
-    return {"groups": groups}
+    try:
+        logger.info("Getting identity groups...")
+        groups = identity_group_manager.get_all_identities()
+        logger.info(f"Retrieved {len(groups)} identity groups")
+        # Return the groups directly as they are already a list
+        return {"groups": groups}
+    except Exception as e:
+        logger.error(f"Error getting identity groups: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/face-sessions")
 async def get_face_sessions(
@@ -2177,6 +2221,200 @@ async def merge_identity_groups(
         "total_faces": len(target["face_ids"]),
         "message": f"Merged {len(source_ids)} identities into {target_id}"
     }
+
+# Training routes
+@app.post("/api/training/start")
+async def start_training(
+    request: TrainingStartRequest,
+    current_user: dict = Depends(auth.get_current_user_optional)
+):
+    """Start a new training job for face recognition model"""
+    try:
+        job_id = training_manager.start_training(request.identity_group_ids)
+        return {"job_id": job_id, "status": "queued"}
+    except Exception as e:
+        logger.error(f"Error starting training: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/training/status/{job_id}")
+async def get_training_status(
+    job_id: str,
+    current_user: dict = Depends(auth.get_current_user_optional)
+):
+    """Get status of a training job"""
+    job_status = training_manager.get_job_status(job_id)
+
+    if not job_status:
+        raise HTTPException(status_code=404, detail="Training job not found")
+
+    return job_status
+
+@app.post("/api/training/test")
+async def test_model(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(auth.get_current_user_optional)
+):
+    """Test the trained model on an uploaded video"""
+    try:
+        # Save uploaded file temporarily
+        temp_dir = os.path.join("/tmp", str(uuid.uuid4()))
+        os.makedirs(temp_dir, exist_ok=True)
+
+        temp_video_path = os.path.join(temp_dir, file.filename)
+        with open(temp_video_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+
+        # Get latest YOLO model
+        latest_model = None
+
+        # Check for latest completed job
+        for job_id, job in training_manager.jobs.items():
+            if job.get('status') == 'completed' and job.get('model_path'):
+                latest_model = job.get('model_path')
+                break
+
+        if not latest_model or not os.path.exists(latest_model):
+            # Try to find the latest model file
+            models_pattern = os.path.join(training_manager.models_dir, "yolo_*/employee_detector_*.pt")
+            import glob
+            model_files = glob.glob(models_pattern)
+            if model_files:
+                # Get the most recent model
+                latest_model = max(model_files, key=os.path.getctime)
+
+        if not latest_model or not os.path.exists(latest_model):
+            raise HTTPException(status_code=400, detail="No trained model available")
+
+        # Test the model
+        results = training_manager.test_model(latest_model, temp_video_path)
+
+        # Clean up
+        shutil.rmtree(temp_dir)
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Error testing model: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.websocket("/api/training/test/ws")
+async def test_model_ws(websocket: WebSocket):
+    """WebSocket endpoint for testing trained model with progress updates"""
+    await websocket.accept()
+    logger.info("[DEBUG] WebSocket connection accepted")
+
+    try:
+        # Receive initial data (model path and video path)
+        logger.info("[DEBUG] Waiting to receive JSON from WebSocket...")
+        data = await websocket.receive_json()
+        logger.info(f"[DEBUG] Received WebSocket data: {data}")
+        logger.info(f"[DEBUG] Data type: {type(data)}")
+        logger.info(f"[DEBUG] Data keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
+        
+        model_path = data.get("model_path")
+        video_path = data.get("video_path")
+        upload_id = data.get("upload_id")
+        
+        logger.info(f"[DEBUG] Extracted from data - upload_id: {upload_id}, video_path: {video_path}, model_path: {model_path}")
+        
+        # If upload_id is provided, get the video path from it
+        if upload_id and not video_path:
+            logger.info(f"[DEBUG] Getting video for upload_id: {upload_id}")
+            
+            # Debug: Check all videos
+            all_videos = upload_manager.get_all_videos()
+            logger.info(f"[DEBUG] Total videos in upload manager: {len(all_videos)}")
+            logger.info(f"[DEBUG] Video IDs in upload manager: {[v['id'] for v in all_videos]}")
+            
+            video = upload_manager.get_video(upload_id)
+            logger.info(f"[DEBUG] Video data retrieved: {video}")
+            
+            if video:
+                video_path = video.get("file_path")
+                logger.info(f"[DEBUG] Video path from upload manager: {video_path}")
+                
+                # Check if file exists
+                if video_path and os.path.exists(video_path):
+                    logger.info(f"[DEBUG] Video file exists at: {video_path}")
+                else:
+                    logger.error(f"[DEBUG] Video file does not exist at: {video_path}")
+            else:
+                logger.error(f"[DEBUG] Video with ID {upload_id} not found")
+                await websocket.send_json({"error": f"Video with ID {upload_id} not found"})
+                await websocket.close()
+                return
+
+        if not model_path and data.get("use_latest"):
+            logger.info("[DEBUG] Looking for latest model...")
+            # Find latest model
+            latest_model = None
+
+            # Check for latest completed job
+            logger.info(f"[DEBUG] Checking training jobs: {training_manager.jobs.keys()}")
+            for job_id, job in training_manager.jobs.items():
+                logger.info(f"[DEBUG] Checking job {job_id}: status={job.get('status')}, model_path={job.get('model_path')}")
+                if job.get('status') == 'completed' and job.get('model_path'):
+                    latest_model = job.get('model_path')
+                    logger.info(f"[DEBUG] Found model from completed job: {latest_model}")
+                    break
+
+            if not latest_model or not os.path.exists(latest_model):
+                # Try to find the latest model file
+                models_pattern = os.path.join(training_manager.models_dir, "yolo_*/employee_detector_*.pt")
+                logger.info(f"[DEBUG] Searching for models with pattern: {models_pattern}")
+                import glob
+                model_files = glob.glob(models_pattern)
+                logger.info(f"[DEBUG] Found model files: {model_files}")
+                if model_files:
+                    # Get the most recent model
+                    latest_model = max(model_files, key=os.path.getctime)
+                    logger.info(f"[DEBUG] Latest model file: {latest_model}")
+
+            model_path = latest_model
+
+        logger.info(f"[DEBUG] Final model_path: {model_path}")
+        logger.info(f"[DEBUG] Final video_path: {video_path}")
+
+        if not model_path or not os.path.exists(model_path):
+            logger.error(f"[DEBUG] No trained model available. Model path: {model_path}")
+            await websocket.send_json({"error": "No trained model available"})
+            await websocket.close()
+            return
+
+        # Progress callback
+        async def progress_callback(progress: int, frames_processed: int, total_frames: int):
+            logger.info(f"[DEBUG] Progress callback: {progress}%, frames: {frames_processed}/{total_frames}")
+            await websocket.send_json({
+                "type": "progress",
+                "progress": progress,
+                "frames_processed": frames_processed,
+                "total_frames": total_frames
+            })
+
+        # Test the model with progress updates
+        logger.info(f"[DEBUG] Starting test_model with model: {model_path}, video: {video_path}")
+        logger.info(f"[DEBUG] About to call training_manager.test_model")
+        logger.info(f"[DEBUG] training_manager type: {type(training_manager)}")
+        logger.info(f"[DEBUG] model_path type: {type(model_path)}, value: {model_path}")
+        logger.info(f"[DEBUG] video_path type: {type(video_path)}, value: {video_path}")
+        results = training_manager.test_model(model_path, video_path, progress_callback=progress_callback)
+        logger.info(f"[DEBUG] Test results: {results}")
+
+        # Send final results
+        await websocket.send_json({
+            "type": "result",
+            "data": results
+        })
+
+    except Exception as e:
+        logger.error(f"[DEBUG] WebSocket error: {str(e)}")
+        import traceback
+        logger.error(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        await websocket.send_json({"error": str(e)})
+    finally:
+        logger.info("[DEBUG] Closing WebSocket connection")
+        await websocket.close()
 
 # Mount the Gradio app AFTER all API routes are defined
 app.mount("/", gr.routes.App(demo))

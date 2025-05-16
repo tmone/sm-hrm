@@ -2,13 +2,16 @@
 
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Button } from '@/components/ui/button';
 import EmployeeRegistration from './components/EmployeeRegistration';
 import VideoProcessing from './components/VideoProcessing';
-import VideoLabelingHub from './components/VideoLabelingHub';
+import FaceLabelingGrid from './components/FaceLabelingGrid';
 
 export default function FacialRecognitionPage() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState<string>('employees');
   
@@ -21,13 +24,21 @@ export default function FacialRecognitionPage() {
   
   return (
     <div className="container mx-auto py-6 space-y-6 max-w-7xl">
-      <div>
-        <h1 className="text-3xl font-bold">Facial Recognition</h1>
-        <p className="text-muted-foreground mt-1">
-          Manage employee face registrations, process videos, and label detected faces
-        </p>
+      <div className="flex justify-between items-start">
+        <div>
+          <h1 className="text-3xl font-bold">Facial Recognition</h1>
+          <p className="text-muted-foreground mt-1">
+            Manage employee face registrations, process videos, and label detected faces
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          onClick={() => router.push('/facial-recognition/test')}
+        >
+          Test Model
+        </Button>
       </div>
-      
+
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="grid grid-cols-3 w-[400px]">
           <TabsTrigger value="employees">Employees</TabsTrigger>
@@ -44,7 +55,7 @@ export default function FacialRecognitionPage() {
         </TabsContent>
         
         <TabsContent value="labeling" className="space-y-4">
-          <VideoLabelingHub />
+          <FaceLabelingGrid />
         </TabsContent>
       </Tabs>
     </div>

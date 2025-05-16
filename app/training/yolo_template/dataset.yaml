@@ -1,0 +1,10 @@
+# YOLO Dataset Configuration
+# This file will be generated dynamically during training
+
+path: ./dataset  # Path to dataset directory
+train: images/train  # Path to training images
+val: images/val      # Path to validation images
+
+# Number of classes and names will be filled during training
+nc: 0  # Number of classes
+names: []  # Class names (employee IDs)

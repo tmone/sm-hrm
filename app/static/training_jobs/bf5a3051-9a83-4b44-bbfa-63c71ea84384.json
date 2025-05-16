@@ -1,0 +1,14 @@
+{
+  "id": "bf5a3051-9a83-4b44-bbfa-63c71ea84384",
+  "status": "completed",
+  "progress": 100,
+  "message": "Training completed successfully (simulated)",
+  "identity_group_ids": [
+    "PERSON-0017",
+    "PERSON-0020"
+  ],
+  "created_at": "2025-05-16T09:29:21.846769",
+  "updated_at": "2025-05-16T09:29:28.852522",
+  "model_path": "/home/tmone/pinokio/api/StepmediaHRM/app/db/../static/models/face_recognition_model_bf5a3051-9a83-4b44-bbfa-63c71ea84384.json",
+  "error": null
+}

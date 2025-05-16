@@ -1,0 +1,13 @@
+{
+  "id": "2fbecb3b-9727-4dca-be75-1ae5913cb0eb",
+  "status": "failed",
+  "progress": 0,
+  "message": "Training failed",
+  "identity_group_ids": [
+    "PERSON-0017"
+  ],
+  "created_at": "2025-05-16T09:10:32.921750",
+  "updated_at": "2025-05-16T09:10:32.925100",
+  "model_path": null,
+  "error": "'IdentityGroupManager' object has no attribute 'get_identity_group'"
+}

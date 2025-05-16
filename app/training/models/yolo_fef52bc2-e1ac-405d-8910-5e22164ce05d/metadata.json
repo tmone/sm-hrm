@@ -1,0 +1,9 @@
+{
+  "job_id": "fef52bc2-e1ac-405d-8910-5e22164ce05d",
+  "model_path": "/home/tmone/pinokio/api/StepmediaHRM/app/training/models/yolo_fef52bc2-e1ac-405d-8910-5e22164ce05d/employee_detector_fef52bc2-e1ac-405d-8910-5e22164ce05d.pt",
+  "dataset_yaml": "/home/tmone/pinokio/api/StepmediaHRM/app/db/../training/datasets/dataset_fef52bc2-e1ac-405d-8910-5e22164ce05d/dataset.yaml",
+  "epochs": 10,
+  "batch_size": 4,
+  "image_size": 320,
+  "status": "completed"
+}

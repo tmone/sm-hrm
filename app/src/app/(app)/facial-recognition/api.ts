@@ -39,9 +39,18 @@ export async function fetchFromAPI(endpoint: string, options: RequestInit = {}) 
   };
 
   try {
-    // Try using a direct relative path
-    const url = `/${endpoint.startsWith('/') ? endpoint.substring(1) : endpoint}`;
-    
+    // Check if we're on the server side and need to use full URL
+    const isServer = typeof window === 'undefined';
+    let url: string;
+
+    if (isServer) {
+      // On server side, use the backend URL directly
+      url = `http://127.0.0.1:7860/${endpoint.startsWith('/') ? endpoint.substring(1) : endpoint}`;
+    } else {
+      // On client side, use relative path
+      url = `/${endpoint.startsWith('/') ? endpoint.substring(1) : endpoint}`;
+    }
+
     const response = await fetch(url, requestOptions);
     
     // Handle 404 Not Found differently from other errors

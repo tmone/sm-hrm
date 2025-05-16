@@ -1,0 +1,11 @@
+{
+  "type": "simulated",
+  "identity_groups": [
+    "PERSON-0017",
+    "PERSON-0020"
+  ],
+  "total_faces": 16,
+  "created_at": "2025-05-16T09:29:28.852420",
+  "job_id": "bf5a3051-9a83-4b44-bbfa-63c71ea84384",
+  "note": "This is a simulated model. Face recognition requires dlib to be installed."
+}

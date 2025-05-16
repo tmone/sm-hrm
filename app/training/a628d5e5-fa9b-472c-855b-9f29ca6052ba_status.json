@@ -1,0 +1,1 @@
+{"job_id": "a628d5e5-fa9b-472c-855b-9f29ca6052ba", "status": "failed", "progress": 0, "message": "Training failed: \u001b[34m\u001b[1mtrain: \u001b[0mError loading data from /home/tmone/pinokio/api/StepmediaHRM/app/training/datasets/dataset_a628d5e5-fa9b-472c-855b-9f29ca6052ba/images/train\nSee https://docs.ultralytics.com/datasets for dataset formatting guidance."}
