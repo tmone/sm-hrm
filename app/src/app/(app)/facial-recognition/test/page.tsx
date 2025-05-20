@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
@@ -18,6 +18,8 @@ export default function TestModelPage() {
   const [totalFrames, setTotalFrames] = useState(0)
   const [results, setResults] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+  const [taskId, setTaskId] = useState<string | null>(null)
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   const handleFileSelect = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -29,6 +31,50 @@ export default function TestModelPage() {
       setError('Please select a valid video file')
     }
   }, [])
+
+  const pollTaskStatus = async (taskId: string) => {
+    try {
+      const response = await fetch(`/api/training/test/${taskId}`)
+      if (!response.ok) {
+        throw new Error('Failed to get task status')
+      }
+      
+      const data = await response.json()
+      
+      // Update progress
+      setProcessingProgress(data.progress)
+      setFramesProcessed(data.frames_processed)
+      setTotalFrames(data.total_frames)
+      
+      // Check if task is completed
+      if (data.status === 'completed') {
+        setResults(data.results)
+        setIsProcessing(false)
+        // Stop polling
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current)
+          pollIntervalRef.current = null
+        }
+      } else if (data.status === 'failed') {
+        setError(data.error || 'Test failed')
+        setIsProcessing(false)
+        // Stop polling
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current)
+          pollIntervalRef.current = null
+        }
+      }
+    } catch (err) {
+      console.error('Error polling task status:', err)
+      setError('Failed to get task status')
+      setIsProcessing(false)
+      // Stop polling on error
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current)
+        pollIntervalRef.current = null
+      }
+    }
+  }
 
   const handleUpload = async () => {
     if (!selectedFile) return
@@ -43,14 +89,14 @@ export default function TestModelPage() {
 
     try {
       // First, upload the video
-      const formData = new FormData()
-      formData.append('video_file', selectedFile)
+      const uploadFormData = new FormData()
+      uploadFormData.append('video_file', selectedFile)
 
       console.log('[DEBUG] Starting upload:', selectedFile.name, 'Size:', selectedFile.size)
 
       const uploadResponse = await fetch('/api/videos/upload', {
         method: 'POST',
-        body: formData,
+        body: uploadFormData,
       })
 
       console.log('[DEBUG] Upload response status:', uploadResponse.status)
@@ -58,10 +104,19 @@ export default function TestModelPage() {
       if (!uploadResponse.ok) {
         let errorDetail = 'Failed to upload video'
         try {
-          const errorData = await uploadResponse.json()
-          errorDetail = errorData.detail || errorDetail
+          const errorText = await uploadResponse.text()
+          console.error('[DEBUG] Error response text:', errorText)
+          try {
+            const errorData = JSON.parse(errorText)
+            errorDetail = errorData.detail || errorData.error || errorData.message || errorDetail
+          } catch {
+            // If it's not JSON, use the text directly
+            if (errorText) {
+              errorDetail = errorText
+            }
+          }
         } catch (e) {
-          console.error('[DEBUG] Failed to parse error response:', e)
+          console.error('[DEBUG] Failed to read error response:', e)
         }
         throw new Error(errorDetail)
       }
@@ -78,52 +133,68 @@ export default function TestModelPage() {
 
       setIsUploading(false)
 
-      // Connect to WebSocket directly to FastAPI backend
-      const wsUrl = `ws://localhost:7860/api/training/test/ws`
+      // Now start the test using form data
+      const testFormData = new FormData()
+      testFormData.append('upload_id', videoId)
+      testFormData.append('use_latest', 'true')
+
+      console.log('[DEBUG] Starting test with upload_id:', videoId)
+      console.log('[DEBUG] FormData content:', [...testFormData.entries()])
+      console.log('[DEBUG] Request URL:', '/api/training/test')
+
+      // First, try the debug endpoint
+      const debugResponse = await fetch('/api/training/test/debug', {
+        method: 'POST',
+        body: testFormData,
+      })
       
-      console.log('[DEBUG] WebSocket URL:', wsUrl)
-      const ws = new WebSocket(wsUrl)
+      if (debugResponse.ok) {
+        const debugData = await debugResponse.json()
+        console.log('[DEBUG] Debug endpoint response:', debugData)
+      }
 
-      ws.onopen = () => {
-        const requestData = {
-          upload_id: videoId,
-          use_latest: true
+      const testResponse = await fetch('/api/training/test', {
+        method: 'POST',
+        body: testFormData,
+        headers: {
+          // Remove this if it causes issues - FormData needs automatic boundary
+          // 'Content-Type': 'multipart/form-data'
         }
-        console.log('[DEBUG] WebSocket opened, sending data:', requestData)
-        
-        // Send request to test with latest model - send upload_id instead of video_path
-        ws.send(JSON.stringify(requestData))
-      }
+      })
+      
+      console.log('[DEBUG] Test response status:', testResponse.status)
+      console.log('[DEBUG] Test response headers:', testResponse.headers)
 
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data)
-        console.log('[DEBUG] WebSocket message received:', data)
-
-        if (data.type === 'progress') {
-          console.log('[DEBUG] Progress update:', data.progress, 'Frames:', data.frames_processed, '/', data.total_frames)
-          setProcessingProgress(data.progress)
-          setFramesProcessed(data.frames_processed)
-          setTotalFrames(data.total_frames)
-        } else if (data.type === 'result') {
-          console.log('[DEBUG] Results received:', data.data)
-          setResults(data.data)
-          setIsProcessing(false)
-        } else if (data.error) {
-          console.error('[DEBUG] Error received:', data.error)
-          throw new Error(data.error)
+      if (!testResponse.ok) {
+        let errorDetail = 'Failed to start test'
+        try {
+          const errorText = await testResponse.text()
+          console.error('[DEBUG] Error response text:', errorText)
+          try {
+            const errorData = JSON.parse(errorText)
+            errorDetail = errorData.detail || errorData.error || errorData.message || errorDetail
+          } catch {
+            // If it's not JSON, use the text directly
+            if (errorText) {
+              errorDetail = errorText
+            }
+          }
+        } catch (e) {
+          console.error('[DEBUG] Failed to read error response:', e)
         }
+        throw new Error(errorDetail)
       }
 
-      ws.onerror = (error) => {
-        console.error('[DEBUG] WebSocket error:', error)
-        setError('WebSocket connection error during processing')
-        setIsProcessing(false)
-      }
+      const testData = await testResponse.json()
+      const taskId = testData.task_id
 
-      ws.onclose = (event) => {
-        console.log('[DEBUG] WebSocket closed:', { code: event.code, reason: event.reason })
-        setIsProcessing(false)
-      }
+      console.log('[DEBUG] Test started with task ID:', taskId)
+      setTaskId(taskId)
+
+      // Start polling for progress updates
+      pollIntervalRef.current = setInterval(() => {
+        pollTaskStatus(taskId)
+      }, 1000) // Poll every second
 
     } catch (err) {
       console.error('Error:', err)
@@ -132,6 +203,15 @@ export default function TestModelPage() {
       setIsProcessing(false)
     }
   }
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current)
+      }
+    }
+  }, [])
 
   return (
     <div className="container mx-auto py-6">

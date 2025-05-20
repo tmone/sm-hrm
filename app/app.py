@@ -2249,54 +2249,178 @@ async def get_training_status(
 
     return job_status
 
+# Removed duplicate endpoint - see test_model_form below which handles both file and form data
+
+# Test task model for tracking test progress
+class TestTaskModel(BaseModel):
+    task_id: str
+    status: str
+    progress: int = 0
+    frames_processed: int = 0
+    total_frames: int = 0
+    results: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+# In-memory storage for test tasks
+test_tasks: Dict[str, TestTaskModel] = {}
+
+@app.post("/api/training/test/debug")
+async def test_model_debug(request: Request):
+    """Debug endpoint to check what's being received"""
+    content_type = request.headers.get("content-type", "")
+    logger.info(f"[DEBUG] /api/training/test/debug - Content-Type: {content_type}")
+    
+    try:
+        # Try to read as form data
+        form_data = await request.form()
+        logger.info(f"[DEBUG] Form data: {dict(form_data)}")
+        return {"status": "debug", "form_data": dict(form_data)}
+    except Exception as e:
+        logger.error(f"[DEBUG] Error reading form data: {e}")
+        
+    try:
+        # Try to read as JSON
+        json_data = await request.json()
+        logger.info(f"[DEBUG] JSON data: {json_data}")
+        return {"status": "debug", "json_data": json_data}
+    except Exception as e:
+        logger.error(f"[DEBUG] Error reading JSON: {e}")
+    
+    return {"status": "debug", "error": "Could not read request data"}
+
 @app.post("/api/training/test")
 async def test_model(
-    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks,
+    upload_id: str = Form(...),
+    use_latest: str = Form("true"),
+    model_path: Optional[str] = Form(None),
     current_user: dict = Depends(auth.get_current_user_optional)
 ):
-    """Test the trained model on an uploaded video"""
+    """Test trained model using form data submission"""
     try:
-        # Save uploaded file temporarily
-        temp_dir = os.path.join("/tmp", str(uuid.uuid4()))
-        os.makedirs(temp_dir, exist_ok=True)
-
-        temp_video_path = os.path.join(temp_dir, file.filename)
-        with open(temp_video_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-
-        # Get latest YOLO model
-        latest_model = None
-
-        # Check for latest completed job
-        for job_id, job in training_manager.jobs.items():
-            if job.get('status') == 'completed' and job.get('model_path'):
-                latest_model = job.get('model_path')
-                break
-
-        if not latest_model or not os.path.exists(latest_model):
-            # Try to find the latest model file
-            models_pattern = os.path.join(training_manager.models_dir, "yolo_*/employee_detector_*.pt")
-            import glob
-            model_files = glob.glob(models_pattern)
-            if model_files:
-                # Get the most recent model
-                latest_model = max(model_files, key=os.path.getctime)
-
-        if not latest_model or not os.path.exists(latest_model):
+        # Convert string to boolean
+        use_latest_bool = use_latest.lower() == "true"
+        logger.info(f"[DEBUG] /api/training/test called with upload_id: {upload_id}, use_latest: {use_latest_bool}, model_path: {model_path}")
+        
+        # Generate a unique task ID
+        task_id = str(uuid.uuid4())
+        
+        # Get video path from upload_id
+        video = upload_manager.get_video(upload_id)
+        logger.info(f"[DEBUG] Retrieved video: {video}")
+        
+        if not video:
+            logger.error(f"[DEBUG] Video with ID {upload_id} not found")
+            raise HTTPException(status_code=404, detail=f"Video with ID {upload_id} not found")
+        
+        video_path = video.get("file_path")
+        if not video_path or not os.path.exists(video_path):
+            raise HTTPException(status_code=404, detail="Video file not found")
+        
+        # Find model path
+        if not model_path and use_latest_bool:
+            latest_model = None
+            
+            logger.info(f"[DEBUG] Looking for latest model, current jobs: {training_manager.jobs.keys()}")
+            
+            # Check for latest completed job
+            for job_id, job in training_manager.jobs.items():
+                if job.get('status') == 'completed' and job.get('model_path'):
+                    latest_model = job.get('model_path')
+                    logger.info(f"[DEBUG] Found completed job {job_id} with model: {latest_model}")
+                    break
+            
+            if not latest_model or not os.path.exists(latest_model):
+                # Try to find the latest model file
+                models_pattern = os.path.join(training_manager.models_dir, "yolo_*/employee_detector_*.pt")
+                logger.info(f"[DEBUG] Searching for models with pattern: {models_pattern}")
+                import glob
+                model_files = glob.glob(models_pattern)
+                logger.info(f"[DEBUG] Found model files: {model_files}")
+                if model_files:
+                    # Get the most recent model
+                    latest_model = max(model_files, key=os.path.getctime)
+                    logger.info(f"[DEBUG] Selected most recent model: {latest_model}")
+            
+            model_path = latest_model
+        
+        logger.info(f"[DEBUG] Final model_path: {model_path}")
+        
+        if not model_path or not os.path.exists(model_path):
+            logger.error(f"[DEBUG] No trained model available at path: {model_path}")
             raise HTTPException(status_code=400, detail="No trained model available")
-
-        # Test the model
-        results = training_manager.test_model(latest_model, temp_video_path)
-
-        # Clean up
-        shutil.rmtree(temp_dir)
-
-        return results
-
+        
+        # Create initial task
+        task = TestTaskModel(
+            task_id=task_id,
+            status="processing",
+            progress=0,
+            frames_processed=0,
+            total_frames=0
+        )
+        test_tasks[task_id] = task
+        
+        # Start background processing
+        background_tasks.add_task(
+            _process_test_task,
+            task_id,
+            model_path,
+            video_path
+        )
+        
+        return {"task_id": task_id, "status": "processing"}
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error testing model: {str(e)}")
+        logger.error(f"Error starting test task: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+def _process_test_task(task_id: str, model_path: str, video_path: str):
+    """Background task to process video testing"""
+    try:
+        task = test_tasks.get(task_id)
+        if not task:
+            logger.error(f"Task {task_id} not found")
+            return
+        
+        # Progress callback
+        def progress_callback(progress: int, frames_processed: int, total_frames: int):
+            task.progress = progress
+            task.frames_processed = frames_processed
+            task.total_frames = total_frames
+            logger.info(f"Test progress: {progress}%, frames: {frames_processed}/{total_frames}")
+        
+        # Test the model
+        results = training_manager.test_model(model_path, video_path, progress_callback=progress_callback)
+        
+        # Update task with results
+        task.status = "completed"
+        task.results = results
+        
+    except Exception as e:
+        logger.error(f"Error processing test task {task_id}: {str(e)}")
+        task = test_tasks.get(task_id)
+        if task:
+            task.status = "failed"
+            task.error = str(e)
+
+@app.get("/api/training/test/{task_id}")
+async def get_test_status(task_id: str):
+    """Get the status of a test task"""
+    task = test_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    return {
+        "task_id": task.task_id,
+        "status": task.status,
+        "progress": task.progress,
+        "frames_processed": task.frames_processed,
+        "total_frames": task.total_frames,
+        "results": task.results,
+        "error": task.error
+    }
 
 @app.websocket("/api/training/test/ws")
 async def test_model_ws(websocket: WebSocket):
